@@ -1,12 +1,25 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { ArrowDownAZ, Check, ChevronDown, ChevronRight, GripVertical, MoreVertical, Plus, StickyNote, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  ArrowDownAZ,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Download,
+  GripVertical,
+  MoreVertical,
+  Plus,
+  StickyNote,
+  Upload,
+  X,
+} from "lucide-react";
 import { fetchTickers24h } from "@/lib/binance/rest";
 import { getBinanceWS } from "@/lib/binance/ws";
 import { fetchStockQuotes } from "@/lib/stocks/rest";
 import { getMarketType, getLogoUrl } from "@/lib/market";
 import { useChartStore } from "@/lib/store/chart-store";
+import { exportBackup, importBackup } from "@/lib/store/backup";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Dialog,
@@ -69,6 +82,7 @@ export function Watchlist() {
   const moveSymbolToSection = useChartStore((s) => s.moveSymbolToSection);
   const setSectionSymbols = useChartStore((s) => s.setSectionSymbols);
 
+  const importInputRef = useRef<HTMLInputElement>(null);
   const [rows, setRows] = useState<Record<string, Row>>({});
   const [flash, setFlash] = useState<Record<string, "up" | "down" | null>>({});
   const [prompt, setPrompt] = useState<PromptMode | null>(null);
@@ -308,8 +322,40 @@ export function Watchlist() {
               >
                 Eliminar lista
               </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={exportBackup} className="text-xs">
+                <Download className="h-3.5 w-3.5" />
+                Exportar respaldo
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => importInputRef.current?.click()} className="text-xs">
+                <Upload className="h-3.5 w-3.5" />
+                Importar respaldo…
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (!file) return;
+              if (
+                !window.confirm(
+                  "Importar el respaldo reemplaza tus listas, notas, dibujos e indicadores actuales. ¿Continuar?",
+                )
+              ) {
+                return;
+              }
+              try {
+                await importBackup(file);
+              } catch (err) {
+                window.alert(err instanceof Error ? err.message : "No se pudo importar el respaldo.");
+              }
+            }}
+          />
         </div>
       </div>
       <div className="grid grid-cols-[auto_1fr_auto_auto] gap-2 border-b border-tv-border px-3 py-1.5 text-[10px] uppercase tracking-wider text-tv-text-dim">
