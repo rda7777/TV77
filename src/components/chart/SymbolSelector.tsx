@@ -20,13 +20,14 @@ import type { SymbolInfo } from "@/lib/binance/types";
 interface Result {
   symbol: string;
   label: string;
-  market: "crypto" | "stock" | "etf" | "commodity";
+  market: "crypto" | "stock" | "etf" | "commodity" | "index";
 }
 
 export function SymbolSelector() {
   const symbol = useChartStore((s) => s.symbol);
   const setSymbol = useChartStore((s) => s.setSymbol);
   const addToWatchlist = useChartStore((s) => s.addToWatchlist);
+  const addTargetSection = useChartStore((s) => s.addSymbolTargetSection);
   const open = useChartStore((s) => s.symbolDialogOpen);
   const setOpen = useChartStore((s) => s.setSymbolDialogOpen);
 
@@ -91,7 +92,7 @@ export function SymbolSelector() {
         <div className="border-b border-tv-border p-3">
           <Input
             autoFocus
-            placeholder="BTC, ETH, AAPL…"
+            placeholder="BTC, AAPL, NASDAQ…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="bg-tv-bg"
@@ -109,7 +110,7 @@ export function SymbolSelector() {
                 key={`${s.market}-${s.symbol}`}
                 onClick={() => {
                   setSymbol(s.symbol);
-                  addToWatchlist(s.symbol);
+                  if (addTargetSection) addToWatchlist(s.symbol, addTargetSection);
                   setOpen(false);
                   setQuery("");
                 }}
@@ -129,7 +130,9 @@ export function SymbolSelector() {
                       ? "ETF"
                       : s.market === "commodity"
                         ? "Materia prima"
-                        : "Stock"}
+                        : s.market === "index"
+                          ? "Índice"
+                          : "Stock"}
                 </span>
               </button>
             ))}

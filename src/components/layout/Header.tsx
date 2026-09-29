@@ -4,6 +4,7 @@ import { Bell, Camera, Code2, Moon, Sun, Zap } from "lucide-react";
 import { SymbolSelector } from "@/components/chart/SymbolSelector";
 import { TimeframeSelector } from "@/components/chart/TimeframeSelector";
 import { IndicatorMenu } from "@/components/chart/IndicatorMenu";
+import { ScaleModeMenu } from "@/components/chart/ScaleModeMenu";
 import { Separator } from "@/components/ui/separator";
 import { useChartStore } from "@/lib/store/chart-store";
 import { useAlertsStore } from "@/lib/store/alerts-store";
@@ -33,6 +34,7 @@ export function Header() {
         <TimeframeSelector />
         <Separator orientation="vertical" className="mx-1 h-6 bg-tv-border" />
         <IndicatorMenu />
+        <ScaleModeMenu />
       </div>
 
       <div className="flex items-center gap-2">

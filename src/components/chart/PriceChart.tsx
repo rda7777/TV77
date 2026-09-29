@@ -7,29 +7,49 @@ import {
   LineSeries,
   HistogramSeries,
   CrosshairMode,
+  PriceScaleMode,
   type IChartApi,
   type ISeriesApi,
   type IPriceLine,
   type UTCTimestamp,
+  type Logical,
 } from "lightweight-charts";
 import { fetchKlines } from "@/lib/binance/rest";
 import { getBinanceWS } from "@/lib/binance/ws";
 import { fetchStockKlines, fetchSymbolName } from "@/lib/stocks/rest";
 import { getMarketType } from "@/lib/market";
-import { ema, sma, rsi, macd, supportResistance } from "@/lib/indicators";
+import {
+  EVENT_STYLE,
+  bucketEventsByCandle,
+  describeEvent,
+  fetchStockEvents,
+  type StockEvent,
+  type StockEventsResponse,
+} from "@/lib/stocks/events";
+import { ema, sma, smaOfPoints, rsi, macd, supportResistance } from "@/lib/indicators";
+import { ChevronDown, ChevronRight, Zap } from "lucide-react";
+import { NEWS_COLOR, fetchStockNews, timeAgo, type NewsItem } from "@/lib/stocks/news";
+import { cn } from "@/lib/utils";
 import type { Candle, Timeframe } from "@/lib/binance/types";
 import {
+  DEFAULT_TRENDLINE_COLOR,
+  DEFAULT_TRENDLINE_EXTEND,
   INDICATOR_COLORS,
   useChartStore,
   type IndicatorKey,
   type TrendPoint,
-  type TrendLine,
   type TrendLineExtend,
 } from "@/lib/store/chart-store";
 import { formatPrice, formatVolume } from "@/lib/format";
 import { IndicatorPill } from "./IndicatorPill";
 import { MeasureOverlay } from "./MeasureOverlay";
 import { TrendLineToolbar } from "./TrendLineToolbar";
+import { RectangleToolbar } from "./RectangleToolbar";
+import { RectanglePrimitive, type RectangleHit } from "./rectangle-primitive";
+import { ArrowToolbar } from "./ArrowToolbar";
+import { ArrowPrimitive, type ArrowHit } from "./arrow-primitive";
+import { BandPrimitive } from "./band-primitive";
+import { TrendLinePrimitive } from "./trendline-primitive";
 
 interface MeasurePoint {
   time: number;
@@ -50,6 +70,8 @@ interface TrendDraftState {
 const INITIAL_TREND_DRAFT: TrendDraftState = { phase: "idle", a: null, b: null };
 
 interface TextDraftState {
+  /** Set when editing an existing annotation; absent for a new one */
+  id?: string;
   time: number;
   price: number;
   value: string;
@@ -65,6 +87,9 @@ function durationLabel(aTime: number, bTime: number): string {
   return `${minutes}m`;
 }
 
+/** How far (px) a cloned trend line is offset from its original */
+const CLONE_OFFSET_PX = 32;
+
 function toExtend(left: boolean, right: boolean): TrendLineExtend {
   if (left && right) return "both";
   if (left) return "left";
@@ -72,22 +97,14 @@ function toExtend(left: boolean, right: boolean): TrendLineExtend {
   return "none";
 }
 
-function distanceToSegment(
-  px: number,
-  py: number,
-  ax: number,
-  ay: number,
-  bx: number,
-  by: number,
-): number {
-  const dx = bx - ax;
-  const dy = by - ay;
-  const lengthSq = dx * dx + dy * dy;
-  let t = lengthSq === 0 ? 0 : ((px - ax) * dx + (py - ay) * dy) / lengthSq;
-  t = Math.max(0, Math.min(1, t));
-  const cx = ax + t * dx;
-  const cy = ay + t * dy;
-  return Math.hypot(px - cx, py - cy);
+/**
+ * Price after dragging a drawing by the pointer movement start→cur. On the exponential (log) axis the
+ * move is a ratio, so the drawing keeps its on-screen shape; otherwise it's a plain price offset.
+ */
+function shiftPrice(price: number, start: number, cur: number, exponential: boolean): number {
+  return exponential && price > 0 && start > 0 && cur > 0
+    ? price * (cur / start)
+    : price + (cur - start);
 }
 
 interface Props {
@@ -111,6 +128,8 @@ interface ThemePalette {
   text: string;
   textMuted: string;
   grid: string;
+  /** Fading-momentum MACD histogram bars */
+  histWeak: string;
 }
 
 const TV_PALETTES: Record<"dark" | "light", ThemePalette> = {
@@ -121,6 +140,7 @@ const TV_PALETTES: Record<"dark" | "light", ThemePalette> = {
     text: "#d1d4dc",
     textMuted: "#787b86",
     grid: "#1e222d",
+    histWeak: "#d1d4dc",
   },
   light: {
     bg: "#ffffff",
@@ -129,6 +149,7 @@ const TV_PALETTES: Record<"dark" | "light", ThemePalette> = {
     text: "#131722",
     textMuted: "#5d606b",
     grid: "#f5f6fa",
+    histWeak: "#b2b5be",
   },
 };
 
@@ -145,14 +166,30 @@ interface HoverInfo {
 interface LastValues {
   ema20?: number;
   ema50?: number;
+  ema150?: number;
   ema200?: number;
   sma?: number;
   rsi?: number;
+  rsiMa?: number;
   macd?: number;
   macdSignal?: number;
   macdHist?: number;
   volume?: number;
 }
+
+/** Event badges (dividends / splits / earnings) sit this far above the main pane's bottom edge */
+const EVENT_STRIP_OFFSET = 12;
+const EVENT_BADGE_SIZE = 14;
+const NEWS_POLL_MS = 5 * 60 * 1000;
+/** RSI-based moving average (TradingView's default: SMA 14 of the RSI) */
+const RSI_MA_PERIOD = 14;
+const RSI_MA_COLOR = "#fdd835";
+const RSI_BAND_COLOR = "rgba(126, 87, 194, 0.1)";
+/** MACD histogram: teal/red while momentum builds; fading bars use the theme's `histWeak` */
+const MACD_HIST_COLORS = {
+  up: "#26a69a",
+  down: "#f23645",
+};
 
 interface PaneOffset {
   top: number;
@@ -167,24 +204,30 @@ export function PriceChart({ symbol, timeframe }: Props) {
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const ema20Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const ema50Ref = useRef<ISeriesApi<"Line"> | null>(null);
+  const ema150Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const ema200Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const smaRef = useRef<ISeriesApi<"Line"> | null>(null);
   const rsiRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const rsi30Ref = useRef<ISeriesApi<"Line"> | null>(null);
-  const rsi70Ref = useRef<ISeriesApi<"Line"> | null>(null);
-  const macdRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const macdSignalRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const rsiMaRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const rsiLevelsRef = useRef<IPriceLine[]>([]);
+  const rsiBandRef = useRef<BandPrimitive | null>(null);
+  const macdZeroLineRef = useRef<IPriceLine | null>(null);
   const macdHistRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const candlesRef = useRef<Candle[]>([]);
   const priceLinesMapRef = useRef<Map<string, IPriceLine>>(new Map());
   const srPriceLinesRef = useRef<IPriceLine[]>([]);
-  const trendSeriesMapRef = useRef<Map<string, ISeriesApi<"Line">>>(new Map());
-  const previewTrendSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const trendPrimitivesRef = useRef<Map<string, TrendLinePrimitive>>(new Map());
+  const previewTrendRef = useRef<TrendLinePrimitive | null>(null);
+  const rectPrimitivesRef = useRef<Map<string, RectanglePrimitive>>(new Map());
+  const previewRectRef = useRef<RectanglePrimitive | null>(null);
+  const arrowPrimitivesRef = useRef<Map<string, ArrowPrimitive>>(new Map());
+  const previewArrowRef = useRef<ArrowPrimitive | null>(null);
 
   const indicators = useChartStore((s) => s.indicators);
   const hidden = useChartStore((s) => s.hidden);
   const config = useChartStore((s) => s.config);
   const tool = useChartStore((s) => s.tool);
+  const setTool = useChartStore((s) => s.setTool);
   const magnetMode = useChartStore((s) => s.magnetMode);
   const priceLines = useChartStore((s) => s.priceLines);
   const addPriceLine = useChartStore((s) => s.addPriceLine);
@@ -194,13 +237,29 @@ export function PriceChart({ symbol, timeframe }: Props) {
   const removeTrendLine = useChartStore((s) => s.removeTrendLine);
   const selectedTrendLineId = useChartStore((s) => s.selectedTrendLineId);
   const setSelectedTrendLineId = useChartStore((s) => s.setSelectedTrendLineId);
+  const rectangles = useChartStore((s) => s.rectangles);
+  const addRectangle = useChartStore((s) => s.addRectangle);
+  const updateRectangle = useChartStore((s) => s.updateRectangle);
+  const removeRectangle = useChartStore((s) => s.removeRectangle);
+  const selectedRectangleId = useChartStore((s) => s.selectedRectangleId);
+  const setSelectedRectangleId = useChartStore((s) => s.setSelectedRectangleId);
+  const arrows = useChartStore((s) => s.arrows);
+  const addArrow = useChartStore((s) => s.addArrow);
+  const updateArrow = useChartStore((s) => s.updateArrow);
+  const removeArrow = useChartStore((s) => s.removeArrow);
+  const selectedArrowId = useChartStore((s) => s.selectedArrowId);
+  const setSelectedArrowId = useChartStore((s) => s.setSelectedArrowId);
   const textAnnotations = useChartStore((s) => s.textAnnotations);
   const addTextAnnotation = useChartStore((s) => s.addTextAnnotation);
+  const updateTextAnnotation = useChartStore((s) => s.updateTextAnnotation);
+  const removeTextAnnotation = useChartStore((s) => s.removeTextAnnotation);
   const removeIndicator = useChartStore((s) => s.removeIndicator);
   const toggleHidden = useChartStore((s) => s.toggleHidden);
   const setSettingsTarget = useChartStore((s) => s.setSettingsTarget);
   const screenshotRequestId = useChartStore((s) => s.screenshotRequestId);
   const theme = useChartStore((s) => s.theme);
+  const scaleMode = useChartStore((s) => s.scaleMode);
+  const setScaleMode = useChartStore((s) => s.setScaleMode);
 
   // Refs to avoid recreating subscribeClick on every tool change
   const toolRef = useRef(tool);
@@ -209,6 +268,8 @@ export function PriceChart({ symbol, timeframe }: Props) {
   magnetRef.current = magnetMode;
   const paletteRef = useRef<ThemePalette>(TV_PALETTES[theme]);
   paletteRef.current = TV_PALETTES[theme];
+  const scaleModeRef = useRef(scaleMode);
+  scaleModeRef.current = scaleMode;
   const addPriceLineRef = useRef(addPriceLine);
   addPriceLineRef.current = addPriceLine;
   const addTrendLineRef = useRef(addTrendLine);
@@ -217,6 +278,18 @@ export function PriceChart({ symbol, timeframe }: Props) {
   trendLinesRef.current = trendLines;
   const setSelectedTrendLineIdRef = useRef(setSelectedTrendLineId);
   setSelectedTrendLineIdRef.current = setSelectedTrendLineId;
+  const addRectangleRef = useRef(addRectangle);
+  addRectangleRef.current = addRectangle;
+  const rectanglesRef = useRef(rectangles);
+  rectanglesRef.current = rectangles;
+  const setSelectedRectangleIdRef = useRef(setSelectedRectangleId);
+  setSelectedRectangleIdRef.current = setSelectedRectangleId;
+  const addArrowRef = useRef(addArrow);
+  addArrowRef.current = addArrow;
+  const arrowsRef = useRef(arrows);
+  arrowsRef.current = arrows;
+  const setSelectedArrowIdRef = useRef(setSelectedArrowId);
+  setSelectedArrowIdRef.current = setSelectedArrowId;
   const addTextAnnotationRef = useRef(addTextAnnotation);
   addTextAnnotationRef.current = addTextAnnotation;
   const symbolRef = useRef(symbol);
@@ -229,12 +302,30 @@ export function PriceChart({ symbol, timeframe }: Props) {
   hiddenRef.current = hidden;
 
   const [companyName, setCompanyName] = useState<string | null>(null);
+  const eventToggles = useChartStore((s) => s.events);
+  const [loadedEvents, setLoadedEvents] = useState<{
+    symbol: string;
+    data: StockEventsResponse;
+  } | null>(null);
+  // Derived instead of reset-in-effect: stale events from the previous symbol never render
+  const stockEvents =
+    market === "stock" && loadedEvents?.symbol === symbol ? loadedEvents.data : null;
+  const [loadedNews, setLoadedNews] = useState<{ symbol: string; items: NewsItem[] } | null>(null);
+  const stockNews = market === "stock" && loadedNews?.symbol === symbol ? loadedNews.items : null;
+  /** News card opened from a lightning badge: the candle it belongs to + "Ver todos" state */
+  const [openNews, setOpenNews] = useState<{ time: number; expanded: boolean } | null>(null);
+  /** Bumped whenever a fresh candle set is loaded, so event markers re-snap to it */
+  const [candlesVersion, setCandlesVersion] = useState(0);
+  /** Candle time → visible events on that candle (for the hover tooltip) */
+  const eventsByCandleRef = useRef<Map<number, StockEvent[]>>(new Map());
   const [hover, setHover] = useState<HoverInfo | null>(null);
   const [lastPrice, setLastPrice] = useState<{ value: number; pct: number } | null>(null);
   const [lastValues, setLastValues] = useState<LastValues>({});
   const [paneOffsets, setPaneOffsets] = useState<PaneOffset[]>([]);
   const [measure, setMeasure] = useState<MeasureState>(INITIAL_MEASURE);
   const [trendDraft, setTrendDraft] = useState<TrendDraftState>(INITIAL_TREND_DRAFT);
+  const [rectDraft, setRectDraft] = useState<TrendDraftState>(INITIAL_TREND_DRAFT);
+  const [arrowDraft, setArrowDraft] = useState<TrendDraftState>(INITIAL_TREND_DRAFT);
   const [textDraft, setTextDraft] = useState<TextDraftState | null>(null);
   const [magnetPoint, setMagnetPoint] = useState<TrendPoint | null>(null);
   const [renderTick, setRenderTick] = useState(0);
@@ -242,6 +333,10 @@ export function PriceChart({ symbol, timeframe }: Props) {
   measureRef.current = measure;
   const trendDraftRef = useRef(trendDraft);
   trendDraftRef.current = trendDraft;
+  const rectDraftRef = useRef(rectDraft);
+  rectDraftRef.current = rectDraft;
+  const arrowDraftRef = useRef(arrowDraft);
+  arrowDraftRef.current = arrowDraft;
   const textDraftRef = useRef(textDraft);
   textDraftRef.current = textDraft;
 
@@ -256,60 +351,286 @@ export function PriceChart({ symbol, timeframe }: Props) {
     );
   }
 
-  // Helper — resolve the two points a trend line should actually be drawn between,
-  // extrapolating past a/b toward the visible edges when "extend" (ray) is set.
-  function computeExtendedPoints(tl: TrendLine): TrendPoint[] {
-    const [p1, p2] = [tl.a, tl.b].sort((x, y) => x.time - y.time);
-    if (tl.extend === "none" || !chartRef.current) return [p1, p2];
-    const dt = p2.time - p1.time;
-    if (dt === 0) return [p1, p2];
-    const slope = (p2.price - p1.price) / dt;
-    const range = chartRef.current.timeScale().getVisibleRange();
-    let leftTime = p1.time;
-    let rightTime = p2.time;
-    if (range) {
-      const from = Number(range.from);
-      const to = Number(range.to);
-      const margin = Math.max(1, to - from);
-      if (tl.extend === "left" || tl.extend === "both") leftTime = Math.min(p1.time, from - margin);
-      if (tl.extend === "right" || tl.extend === "both") rightTime = Math.max(p2.time, to + margin);
-    }
-    const leftPrice = p1.price + slope * (leftTime - p1.time);
-    const rightPrice = p1.price + slope * (rightTime - p1.time);
-    return [
-      { time: leftTime, price: leftPrice },
-      { time: rightTime, price: rightPrice },
-    ];
+  // Smallest recent spacing between candles ≈ the bar interval (gaps only make spacing bigger)
+  function barStep(): number {
+    const c = candlesRef.current;
+    let step = Infinity;
+    for (let i = Math.max(1, c.length - 6); i < c.length; i++) step = Math.min(step, c[i].time - c[i - 1].time);
+    return isFinite(step) ? step : 86400;
   }
 
-  // Helper — find the nearest trend line (for this symbol) to a click point, within a pixel threshold
-  function hitTestTrendLine(px: number, py: number): string | null {
+  // Helper — time → pane x, extrapolating by whole bars into the blank area past the last candle
+  // (timeToCoordinate only knows times that have a candle)
+  function timeToX(time: number): number | null {
     const chart = chartRef.current;
-    const series = candleSeriesRef.current;
-    if (!chart || !series) return null;
+    const c = candlesRef.current;
+    if (!chart) return null;
     const ts = chart.timeScale();
-    const lines = trendLinesRef.current.filter((t) => t.symbol === symbolRef.current);
-    let bestId: string | null = null;
-    let bestDist = 8;
-    for (const tl of lines) {
-      const [p1, p2] = computeExtendedPoints(tl);
-      const ax = ts.timeToCoordinate(p1.time as UTCTimestamp);
-      const ay = series.priceToCoordinate(p1.price);
-      const bx = ts.timeToCoordinate(p2.time as UTCTimestamp);
-      const by = series.priceToCoordinate(p2.price);
-      if (ax === null || ay === null || bx === null || by === null) continue;
-      const d = distanceToSegment(px, py, ax, ay, bx, by);
-      if (d < bestDist) {
-        bestDist = d;
-        bestId = tl.id;
+    const direct = ts.timeToCoordinate(time as UTCTimestamp);
+    if (direct !== null || c.length === 0) return direct;
+    const last = c.length - 1;
+    let logical: number;
+    if (time > c[last].time) logical = last + (time - c[last].time) / barStep();
+    else if (time < c[0].time) logical = (time - c[0].time) / barStep();
+    else {
+      // Between two candles (e.g. a gap): interpolate their indices
+      let lo = 0;
+      let hi = last;
+      while (hi - lo > 1) {
+        const mid = (lo + hi) >> 1;
+        if (c[mid].time <= time) lo = mid;
+        else hi = mid;
       }
+      logical = lo + (time - c[lo].time) / (c[hi].time - c[lo].time || 1);
     }
-    return bestId;
+    // logicalToCoordinate only handles whole indices (fractions come back as 0) — interpolate
+    const i = Math.floor(logical);
+    const x0 = ts.logicalToCoordinate(i as Logical);
+    const x1 = ts.logicalToCoordinate((i + 1) as Logical);
+    if (x0 === null || x1 === null) return null;
+    return x0 + (x1 - x0) * (logical - i);
+  }
+  const timeToXRef = useRef(timeToX);
+  timeToXRef.current = timeToX;
+
+  // Helper — pane x → time, snapped to a bar; works past the last candle too
+  function xToTime(x: number): number | null {
+    const chart = chartRef.current;
+    const c = candlesRef.current;
+    if (!chart || c.length === 0) return null;
+    const logical = chart.timeScale().coordinateToLogical(x);
+    if (logical === null) return null;
+    const idx = Math.round(logical);
+    const last = c.length - 1;
+    if (idx >= 0 && idx <= last) return c[idx].time;
+    if (idx > last) return c[last].time + (idx - last) * barStep();
+    return c[0].time + idx * barStep();
+  }
+  const xToTimeRef = useRef(xToTime);
+  xToTimeRef.current = xToTime;
+
+  // Helper — topmost trend line (for this symbol) under a chart-relative point
+  function hitTestTrendLine(px: number, py: number): string | null {
+    const lines = trendLinesRef.current.filter((t) => t.symbol === symbolRef.current);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (trendPrimitivesRef.current.get(lines[i].id)?.hitsPoint(px, py)) return lines[i].id;
+    }
+    return null;
   }
   const hitTestTrendLineRef = useRef(hitTestTrendLine);
   hitTestTrendLineRef.current = hitTestTrendLine;
 
+  // Helper — viewport pointer → chart (time, price); null when outside the loaded data range
+  function pointerToTimePrice(clientX: number, clientY: number): TrendPoint | null {
+    const container = containerRef.current;
+    const chart = chartRef.current;
+    const series = candleSeriesRef.current;
+    if (!container || !chart || !series) return null;
+    const box = container.getBoundingClientRect();
+    const time = chart.timeScale().coordinateToTime(clientX - box.left);
+    const price = series.coordinateToPrice(clientY - box.top);
+    if (time === null || price === null || !isFinite(price)) return null;
+    return { time: Number(time), price };
+  }
+
+  // Helper — topmost rectangle (for this symbol) under a chart-relative point
+  function hitTestRectangle(x: number, y: number): string | null {
+    const rects = rectanglesRef.current.filter((r) => r.symbol === symbolRef.current);
+    for (let i = rects.length - 1; i >= 0; i--) {
+      if (rectPrimitivesRef.current.get(rects[i].id)?.hitRegion(x, y)) return rects[i].id;
+    }
+    return null;
+  }
+  const hitTestRectangleRef = useRef(hitTestRectangle);
+  hitTestRectangleRef.current = hitTestRectangle;
+
+  // Helper — topmost arrow (for this symbol) under a chart-relative point
+  function hitTestArrow(x: number, y: number): string | null {
+    const list = arrowsRef.current.filter((ar) => ar.symbol === symbolRef.current);
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (arrowPrimitivesRef.current.get(list[i].id)?.hitRegion(x, y)) return list[i].id;
+    }
+    return null;
+  }
+  const hitTestArrowRef = useRef(hitTestArrow);
+  hitTestArrowRef.current = hitTestArrow;
+
+  // Helper — drag an arrow by its shaft ("body") or move its tail/head ("a"/"b")
+  function startDragArrow(e: React.MouseEvent, id: string, hit: ArrowHit) {
+    const arrow = arrowsRef.current.find((ar) => ar.id === id);
+    const start = pointerToTimePrice(e.clientX, e.clientY);
+    if (!arrow || !start) return;
+    // Handled here — keep the chart from also starting a pan on this mousedown
+    e.stopPropagation();
+    e.preventDefault();
+
+    const from: TrendPoint = start;
+    const origA = arrow.a;
+    const origB = arrow.b;
+
+    function onMove(ev: MouseEvent) {
+      const cur = pointerToTimePrice(ev.clientX, ev.clientY);
+      if (!cur) return;
+      if (hit !== "body") {
+        updateArrow(id, { [hit]: { time: cur.time, price: snapPrice(cur.time, cur.price) } });
+        return;
+      }
+      const dt = cur.time - from.time;
+      const exp = scaleModeRef.current === "exponential" && origA.price > 0 && origB.price > 0;
+      updateArrow(id, {
+        a: { time: origA.time + dt, price: shiftPrice(origA.price, from.price, cur.price, exp) },
+        b: { time: origB.time + dt, price: shiftPrice(origB.price, from.price, cur.price, exp) },
+      });
+    }
+    function onUp() {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+
+  // Helper — drag a rectangle by its body ("body") or resize it from a corner handle
+  function startDragRectangle(e: React.MouseEvent, id: string, hit: RectangleHit) {
+    const rect = rectanglesRef.current.find((r) => r.id === id);
+    const start = pointerToTimePrice(e.clientX, e.clientY);
+    if (!rect || !start) return;
+    // Handled here — keep the chart from also starting a pan on this mousedown
+    e.stopPropagation();
+    e.preventDefault();
+
+    const from: TrendPoint = start;
+    const origA = rect.a;
+    const origB = rect.b;
+    const left = Math.min(origA.time, origB.time);
+    const right = Math.max(origA.time, origB.time);
+    const top = Math.max(origA.price, origB.price);
+    const bottom = Math.min(origA.price, origB.price);
+    // Resizing keeps the corner opposite the dragged one fixed
+    const anchor: TrendPoint | null =
+      hit === "body"
+        ? null
+        : {
+            time: hit === "tl" || hit === "bl" ? right : left,
+            price: hit === "tl" || hit === "tr" ? bottom : top,
+          };
+
+    function onMove(ev: MouseEvent) {
+      const cur = pointerToTimePrice(ev.clientX, ev.clientY);
+      if (!cur) return;
+      if (anchor) {
+        updateRectangle(id, {
+          a: anchor,
+          b: { time: cur.time, price: snapPrice(cur.time, cur.price) },
+        });
+        return;
+      }
+      const dt = cur.time - from.time;
+      const exp = scaleModeRef.current === "exponential" && origA.price > 0 && origB.price > 0;
+      updateRectangle(id, {
+        a: { time: origA.time + dt, price: shiftPrice(origA.price, from.price, cur.price, exp) },
+        b: { time: origB.time + dt, price: shiftPrice(origB.price, from.price, cur.price, exp) },
+      });
+    }
+    function onUp() {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+
+  // Helper — drag a text annotation, shifting its anchor by the pointer delta
+  // Works in pixels (anchor + pointer delta) and snaps to a real bar, so the text never lands
+  // on a time without a candle (gaps, beyond the last bar) where it could not be drawn
+  function startDragText(e: React.PointerEvent, id: string) {
+    if (e.button !== 0) return;
+    const t = textAnnotations.find((a) => a.id === id);
+    const chart = chartRef.current;
+    const series = candleSeriesRef.current;
+    if (!t || !chart || !series) return;
+    const ax = chart.timeScale().timeToCoordinate(t.time as UTCTimestamp);
+    const ay = series.priceToCoordinate(t.price);
+    if (ax === null || ay === null) return;
+    e.stopPropagation();
+    e.preventDefault();
+
+    const startX = e.clientX;
+    const startY = e.clientY;
+    let lastTime = t.time;
+
+    function onMove(ev: PointerEvent) {
+      const x = ax! + (ev.clientX - startX);
+      const y = ay! + (ev.clientY - startY);
+      const time = chart!.timeScale().coordinateToTime(x);
+      const price = series!.coordinateToPrice(y);
+      if (time !== null) lastTime = Number(time);
+      if (price === null || !isFinite(price)) return;
+      updateTextAnnotation(id, { time: lastTime, price });
+    }
+    function onUp() {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    }
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  }
+
+  // Capture-phase mousedown on the chart: a selected rectangle's or arrow's body/handles take
+  // the drag before the chart's own pan handling sees it.
+  function handleChartMouseDown(e: React.MouseEvent<HTMLDivElement>) {
+    if (e.button !== 0 || toolRef.current !== "cursor") return;
+    const box = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - box.left;
+    const y = e.clientY - box.top;
+    if (e.ctrlKey) {
+      const trendHit = hitTestTrendLine(x, y);
+      if (trendHit) {
+        startDragTrendLine(e, trendHit, "move");
+        return;
+      }
+    }
+    if (selectedArrowId) {
+      const hit = arrowPrimitivesRef.current.get(selectedArrowId)?.hitRegion(x, y);
+      if (hit) startDragArrow(e, selectedArrowId, hit);
+      return;
+    }
+    if (selectedRectangleId) {
+      const hit = rectPrimitivesRef.current.get(selectedRectangleId)?.hitRegion(x, y);
+      if (hit) startDragRectangle(e, selectedRectangleId, hit);
+    }
+  }
+
+  // Helper — duplicate a trend line (same style, extend and times) shifted vertically by a few
+  // pixels so the copy is visible and parallel to the original, then select it.
+  function cloneTrendLine(id: string) {
+    const container = containerRef.current;
+    const series = candleSeriesRef.current;
+    const line = trendLinesRef.current.find((t) => t.id === id);
+    if (!container || !series || !line) return;
+
+    const ya = series.priceToCoordinate(line.a.price);
+    const yb = series.priceToCoordinate(line.b.price);
+    if (ya === null || yb === null) return;
+    // Shift down, unless that would push the copy toward the bottom edge of the chart
+    const offset = Math.max(ya, yb) + CLONE_OFFSET_PX > container.clientHeight - 60 ? -CLONE_OFFSET_PX : CLONE_OFFSET_PX;
+    const pa = series.coordinateToPrice(ya + offset);
+    const pb = series.coordinateToPrice(yb + offset);
+    if (pa === null || pb === null || !isFinite(pa) || !isFinite(pb)) return;
+
+    const newId = addTrendLineRef.current(
+      { time: line.a.time, price: pa },
+      { time: line.b.time, price: pb },
+      line.symbol,
+      { color: line.color, extend: line.extend },
+    );
+    setSelectedTrendLineIdRef.current(newId);
+  }
+
   // Helper — start dragging a trend line's endpoint ("a"/"b") or the whole line ("move")
+  // Ctrl+drag on the line's body drags out a parallel copy instead, leaving the original in place
   function startDragTrendLine(e: React.MouseEvent, id: string, mode: "a" | "b" | "move") {
     e.stopPropagation();
     e.preventDefault();
@@ -323,30 +644,45 @@ export function PriceChart({ symbol, timeframe }: Props) {
       const rect = container!.getBoundingClientRect();
       const x = clientX - rect.left;
       const y = clientY - rect.top;
-      const time = chart!.timeScale().coordinateToTime(x);
+      const time = xToTime(x);
       const rawPrice = series!.coordinateToPrice(y);
       if (time === null || rawPrice === null || !isFinite(rawPrice)) return null;
-      return { time: Number(time), price: rawPrice };
+      return { time, price: rawPrice };
     }
 
     const start = toTimePrice(e.clientX, e.clientY);
     if (!start) return;
     const origA = line.a;
     const origB = line.b;
+    // The copy is only created once the pointer really moves, so a stray Ctrl+click
+    // doesn't leave an invisible duplicate on top of the original
+    let targetId: string | null = mode === "move" && e.ctrlKey ? null : id;
+    const startX = e.clientX;
+    const startY = e.clientY;
 
     function onMove(ev: MouseEvent) {
+      if (targetId === null) {
+        if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < 3) return;
+        targetId = addTrendLineRef.current(line!.a, line!.b, line!.symbol, {
+          color: line!.color,
+          extend: line!.extend,
+        });
+        setSelectedTrendLineIdRef.current(targetId);
+      }
       const cur = toTimePrice(ev.clientX, ev.clientY);
       if (!cur) return;
       if (mode === "move") {
         const dt = cur.time - start!.time;
-        const dp = cur.price - start!.price;
-        updateTrendLine(id, {
-          a: { time: origA.time + dt, price: origA.price + dp },
-          b: { time: origB.time + dt, price: origB.price + dp },
+        // Both endpoints must use the same mode or the line would rotate
+        const exp =
+          scaleModeRef.current === "exponential" && origA.price > 0 && origB.price > 0;
+        updateTrendLine(targetId, {
+          a: { time: origA.time + dt, price: shiftPrice(origA.price, start!.price, cur.price, exp) },
+          b: { time: origB.time + dt, price: shiftPrice(origB.price, start!.price, cur.price, exp) },
         });
       } else {
         const price = snapPrice(cur.time, cur.price);
-        updateTrendLine(id, mode === "a" ? { a: { time: cur.time, price } } : { b: { time: cur.time, price } });
+        updateTrendLine(targetId, mode === "a" ? { a: { time: cur.time, price } } : { b: { time: cur.time, price } });
       }
     }
     function onUp() {
@@ -419,6 +755,12 @@ export function PriceChart({ symbol, timeframe }: Props) {
       priceLineStyle: 2,
     });
 
+    // Preview of the rectangle being placed (data stays null until the first click)
+    previewRectRef.current = new RectanglePrimitive(true);
+    candleSeriesRef.current.attachPrimitive(previewRectRef.current);
+    previewArrowRef.current = new ArrowPrimitive(true);
+    candleSeriesRef.current.attachPrimitive(previewArrowRef.current);
+
     ema20Ref.current = chart.addSeries(LineSeries, {
       color: INDICATOR_COLORS.ema20,
       lineWidth: 1,
@@ -427,6 +769,12 @@ export function PriceChart({ symbol, timeframe }: Props) {
     });
     ema50Ref.current = chart.addSeries(LineSeries, {
       color: INDICATOR_COLORS.ema50,
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    ema150Ref.current = chart.addSeries(LineSeries, {
+      color: INDICATOR_COLORS.ema150,
       lineWidth: 1,
       priceLineVisible: false,
       lastValueVisible: false,
@@ -444,16 +792,9 @@ export function PriceChart({ symbol, timeframe }: Props) {
       lastValueVisible: false,
     });
 
-    // Pre-created once (not per-click) — calling addSeries() inside the click
-    // handler was breaking the browser's next click on the chart's canvas.
-    previewTrendSeriesRef.current = chart.addSeries(LineSeries, {
-      color: TV_COLORS.blue,
-      lineWidth: 2,
-      lineStyle: 2,
-      priceLineVisible: false,
-      lastValueVisible: false,
-      visible: false,
-    });
+    // Pre-created once (not per-click), like the rectangle/arrow previews
+    previewTrendRef.current = new TrendLinePrimitive((t) => timeToXRef.current(t), true);
+    candleSeriesRef.current.attachPrimitive(previewTrendRef.current);
 
     chartRef.current = chart;
 
@@ -466,8 +807,24 @@ export function PriceChart({ symbol, timeframe }: Props) {
       const price = time !== null ? snapPrice(time, rawPrice) : rawPrice;
 
       if (toolRef.current === "cursor") {
-        const hitId = hitTestTrendLineRef.current(param.point.x, param.point.y);
-        setSelectedTrendLineIdRef.current(hitId);
+        const arrowHit = hitTestArrowRef.current(param.point.x, param.point.y);
+        if (arrowHit) {
+          setSelectedArrowIdRef.current(arrowHit);
+          return;
+        }
+        const trendHit = hitTestTrendLineRef.current(param.point.x, param.point.y);
+        if (trendHit) {
+          setSelectedTrendLineIdRef.current(trendHit);
+          return;
+        }
+        const rectHit = hitTestRectangleRef.current(param.point.x, param.point.y);
+        if (rectHit) {
+          setSelectedRectangleIdRef.current(rectHit);
+          return;
+        }
+        setSelectedTrendLineIdRef.current(null);
+        setSelectedRectangleIdRef.current(null);
+        setSelectedArrowIdRef.current(null);
         return;
       }
 
@@ -477,13 +834,40 @@ export function PriceChart({ symbol, timeframe }: Props) {
       }
 
       if (toolRef.current === "trendline") {
-        if (time === null) return;
+        // Points may land in the blank area past the last candle, like TradingView
+        const t = time ?? xToTimeRef.current(param.point.x);
+        if (t === null || (param.paneIndex ?? 0) !== 0) return;
         const current = trendDraftRef.current;
         if (current.phase === "idle") {
-          setTrendDraft({ phase: "placing", a: { time, price }, b: { time, price } });
-        } else if (current.a && time !== current.a.time) {
-          addTrendLineRef.current(current.a, { time, price }, symbolRef.current);
+          setTrendDraft({ phase: "placing", a: { time: t, price }, b: { time: t, price } });
+        } else if (current.a && t !== current.a.time) {
+          addTrendLineRef.current(current.a, { time: t, price }, symbolRef.current);
           setTrendDraft(INITIAL_TREND_DRAFT);
+        }
+        return;
+      }
+
+      if (toolRef.current === "rect") {
+        // Corners can't be resolved from clicks in the indicator panes (no candle price there)
+        if (time === null || (param.paneIndex ?? 0) !== 0) return;
+        const current = rectDraftRef.current;
+        if (current.phase === "idle") {
+          setRectDraft({ phase: "placing", a: { time, price }, b: { time, price } });
+        } else if (current.a && (time !== current.a.time || price !== current.a.price)) {
+          addRectangleRef.current(current.a, { time, price }, symbolRef.current);
+          setRectDraft(INITIAL_TREND_DRAFT);
+        }
+        return;
+      }
+
+      if (toolRef.current === "arrow") {
+        if (time === null || (param.paneIndex ?? 0) !== 0) return;
+        const current = arrowDraftRef.current;
+        if (current.phase === "idle") {
+          setArrowDraft({ phase: "placing", a: { time, price }, b: { time, price } });
+        } else if (current.a && (time !== current.a.time || price !== current.a.price)) {
+          addArrowRef.current(current.a, { time, price }, symbolRef.current);
+          setArrowDraft(INITIAL_TREND_DRAFT);
         }
         return;
       }
@@ -525,6 +909,22 @@ export function PriceChart({ symbol, timeframe }: Props) {
         toolRef.current === "trendline" &&
         trendDraftRef.current.phase === "placing" &&
         param.point &&
+        candleSeriesRef.current
+      ) {
+        const rawPrice = candleSeriesRef.current.coordinateToPrice(param.point.y);
+        const time = param.time ? Number(param.time) : xToTimeRef.current(param.point.x);
+        if (time !== null && rawPrice !== null && isFinite(rawPrice)) {
+          const price = snapPrice(time, rawPrice);
+          setTrendDraft((prev) =>
+            prev.phase === "placing" ? { ...prev, b: { time, price } } : prev,
+          );
+        }
+      }
+
+      if (
+        toolRef.current === "rect" &&
+        rectDraftRef.current.phase === "placing" &&
+        param.point &&
         param.time &&
         candleSeriesRef.current
       ) {
@@ -532,7 +932,24 @@ export function PriceChart({ symbol, timeframe }: Props) {
         if (rawPrice !== null && isFinite(rawPrice)) {
           const time = Number(param.time);
           const price = snapPrice(time, rawPrice);
-          setTrendDraft((prev) =>
+          setRectDraft((prev) =>
+            prev.phase === "placing" ? { ...prev, b: { time, price } } : prev,
+          );
+        }
+      }
+
+      if (
+        toolRef.current === "arrow" &&
+        arrowDraftRef.current.phase === "placing" &&
+        param.point &&
+        param.time &&
+        candleSeriesRef.current
+      ) {
+        const rawPrice = candleSeriesRef.current.coordinateToPrice(param.point.y);
+        if (rawPrice !== null && isFinite(rawPrice)) {
+          const time = Number(param.time);
+          const price = snapPrice(time, rawPrice);
+          setArrowDraft((prev) =>
             prev.phase === "placing" ? { ...prev, b: { time, price } } : prev,
           );
         }
@@ -560,6 +977,8 @@ export function PriceChart({ symbol, timeframe }: Props) {
       const isDrawingTool =
         toolRef.current === "hline" ||
         toolRef.current === "trendline" ||
+        toolRef.current === "rect" ||
+        toolRef.current === "arrow" ||
         toolRef.current === "measure" ||
         toolRef.current === "text";
       if (magnetRef.current && isDrawingTool && param.point && param.time && candleSeriesRef.current) {
@@ -620,18 +1039,23 @@ export function PriceChart({ symbol, timeframe }: Props) {
       volumeSeriesRef.current = null;
       priceLinesMapRef.current.clear();
       srPriceLinesRef.current = [];
-      trendSeriesMapRef.current.clear();
-      previewTrendSeriesRef.current = null;
+      trendPrimitivesRef.current.clear();
+      previewTrendRef.current = null;
+      rectPrimitivesRef.current.clear();
+      previewRectRef.current = null;
+      arrowPrimitivesRef.current.clear();
+      previewArrowRef.current = null;
       ema20Ref.current = null;
       ema50Ref.current = null;
+      ema150Ref.current = null;
       ema200Ref.current = null;
       smaRef.current = null;
       rsiRef.current = null;
-      rsi30Ref.current = null;
-      rsi70Ref.current = null;
-      macdRef.current = null;
-      macdSignalRef.current = null;
+      rsiMaRef.current = null;
+      rsiLevelsRef.current = [];
+      rsiBandRef.current = null;
       macdHistRef.current = null;
+      macdZeroLineRef.current = null;
     };
   }, []);
 
@@ -659,9 +1083,32 @@ export function PriceChart({ symbol, timeframe }: Props) {
     });
     candleSeriesRef.current?.applyOptions({ priceLineColor: palette.textMuted });
     volumeSeriesRef.current?.applyOptions({ color: palette.textMuted });
-    rsi30Ref.current?.applyOptions({ color: palette.textMuted });
-    rsi70Ref.current?.applyOptions({ color: palette.textMuted });
+    for (const line of rsiLevelsRef.current) line.applyOptions({ color: palette.textMuted });
+    macdZeroLineRef.current?.applyOptions({ color: palette.textMuted });
+    updateMACD();
   }, [theme]);
+
+  // Price-axis mode for the main pane (linear vs exponential/log). Applied through the candle
+  // series' own scale so the RSI/MACD panes keep their linear axes.
+  useEffect(() => {
+    candleSeriesRef.current?.priceScale().applyOptions({
+      mode: scaleMode === "exponential" ? PriceScaleMode.Logarithmic : PriceScaleMode.Normal,
+    });
+    setRenderTick((t) => t + 1);
+  }, [scaleMode]);
+
+  // Alt+L toggles the log scale, like TradingView
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!e.altKey || e.ctrlKey || e.metaKey || e.code !== "KeyL") return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      e.preventDefault();
+      setScaleMode(scaleModeRef.current === "exponential" ? "linear" : "exponential");
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [setScaleMode]);
 
   // Resolve the company/fund name for the ticker (stocks/ETFs only — crypto pairs have none)
   useEffect(() => {
@@ -674,6 +1121,38 @@ export function PriceChart({ symbol, timeframe }: Props) {
     fetchSymbolName(symbol).then((name) => {
       if (!cancelled) setCompanyName(name);
     });
+    return () => {
+      cancelled = true;
+    };
+  }, [symbol, market]);
+
+  // Latest news (lightning badges) — stocks & ETFs only, refreshed every few minutes
+  useEffect(() => {
+    if (market !== "stock") return;
+    let cancelled = false;
+    const load = () =>
+      fetchStockNews(symbol)
+        .then((items) => {
+          if (!cancelled) setLoadedNews({ symbol, items });
+        })
+        .catch((e) => console.error("Failed to load stock news:", e));
+    load();
+    const id = setInterval(load, NEWS_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [symbol, market]);
+
+  // Corporate events (earnings / dividends / splits) — stocks & ETFs only
+  useEffect(() => {
+    if (market !== "stock") return;
+    let cancelled = false;
+    fetchStockEvents(symbol)
+      .then((data) => {
+        if (!cancelled) setLoadedEvents({ symbol, data });
+      })
+      .catch((e) => console.error("Failed to load stock events:", e));
     return () => {
       cancelled = true;
     };
@@ -714,6 +1193,7 @@ export function PriceChart({ symbol, timeframe }: Props) {
     if (!chartRef.current) return;
     if (indicators.rsi && !rsiRef.current) {
       const paneIndex = 1;
+      // TradingView look: purple RSI + yellow RSI-based MA, 70/50/30 guides over a shaded 30–70 band
       const r = chartRef.current.addSeries(
         LineSeries,
         {
@@ -724,31 +1204,40 @@ export function PriceChart({ symbol, timeframe }: Props) {
         },
         paneIndex,
       );
-      const r30 = chartRef.current.addSeries(
+      const ma = chartRef.current.addSeries(
         LineSeries,
         {
-          color: paletteRef.current.textMuted,
+          color: RSI_MA_COLOR,
           lineWidth: 1,
-          lineStyle: 2,
           priceLineVisible: false,
           lastValueVisible: false,
+          crosshairMarkerVisible: false,
         },
         paneIndex,
       );
-      const r70 = chartRef.current.addSeries(
-        LineSeries,
-        {
+      rsiLevelsRef.current = [
+        { price: 70, lineStyle: 2 },
+        { price: 50, lineStyle: 1 },
+        { price: 30, lineStyle: 2 },
+      ].map(({ price, lineStyle }) =>
+        r.createPriceLine({
+          price,
           color: paletteRef.current.textMuted,
           lineWidth: 1,
-          lineStyle: 2,
-          priceLineVisible: false,
-          lastValueVisible: false,
-        },
-        paneIndex,
+          lineStyle,
+          axisLabelVisible: false,
+          title: "",
+        }),
       );
+      const band = new BandPrimitive(30, 70, RSI_BAND_COLOR);
+      r.attachPrimitive(band);
+      if (macdHistRef.current && macdHistRef.current.getPane().paneIndex() === paneIndex) {
+        macdHistRef.current.moveToPane(paneIndex + 1);
+        chartRef.current.panes()[paneIndex + 1]?.setStretchFactor(1);
+      }
       rsiRef.current = r;
-      rsi30Ref.current = r30;
-      rsi70Ref.current = r70;
+      rsiMaRef.current = ma;
+      rsiBandRef.current = band;
       try {
         chartRef.current.panes()[1]?.setStretchFactor(1);
         chartRef.current.panes()[0]?.setStretchFactor(3);
@@ -756,11 +1245,11 @@ export function PriceChart({ symbol, timeframe }: Props) {
       updateRSI();
     } else if (!indicators.rsi && rsiRef.current && chartRef.current) {
       chartRef.current.removeSeries(rsiRef.current);
-      if (rsi30Ref.current) chartRef.current.removeSeries(rsi30Ref.current);
-      if (rsi70Ref.current) chartRef.current.removeSeries(rsi70Ref.current);
+      if (rsiMaRef.current) chartRef.current.removeSeries(rsiMaRef.current);
       rsiRef.current = null;
-      rsi30Ref.current = null;
-      rsi70Ref.current = null;
+      rsiMaRef.current = null;
+      rsiLevelsRef.current = [];
+      rsiBandRef.current = null;
     }
     requestAnimationFrame(() => recomputePaneOffsets());
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -769,48 +1258,32 @@ export function PriceChart({ symbol, timeframe }: Props) {
   // MACD pane
   useEffect(() => {
     if (!chartRef.current) return;
-    if (indicators.macd && !macdRef.current) {
+    if (indicators.macd && !macdHistRef.current) {
       const paneIndex = indicators.rsi ? 2 : 1;
-      const m = chartRef.current.addSeries(
-        LineSeries,
-        {
-          color: INDICATOR_COLORS.macd,
-          lineWidth: 1,
-          priceLineVisible: false,
-          lastValueVisible: false,
-        },
-        paneIndex,
-      );
-      const s = chartRef.current.addSeries(
-        LineSeries,
-        {
-          color: TV_COLORS.yellow,
-          lineWidth: 1,
-          priceLineVisible: false,
-          lastValueVisible: false,
-        },
-        paneIndex,
-      );
+      // Histogram only (no MACD/signal lines): the bars carry the whole reading
       const h = chartRef.current.addSeries(
         HistogramSeries,
         { priceLineVisible: false, lastValueVisible: false },
         paneIndex,
       );
-      macdRef.current = m;
-      macdSignalRef.current = s;
+      macdZeroLineRef.current = h.createPriceLine({
+        price: 0,
+        color: paletteRef.current.textMuted,
+        lineWidth: 1,
+        lineStyle: 0,
+        axisLabelVisible: false,
+        title: "",
+      });
       macdHistRef.current = h;
       try {
         chartRef.current.panes()[paneIndex]?.setStretchFactor(1);
         chartRef.current.panes()[0]?.setStretchFactor(3);
       } catch {}
       updateMACD();
-    } else if (!indicators.macd && macdRef.current && chartRef.current) {
-      if (macdRef.current) chartRef.current.removeSeries(macdRef.current);
-      if (macdSignalRef.current) chartRef.current.removeSeries(macdSignalRef.current);
-      if (macdHistRef.current) chartRef.current.removeSeries(macdHistRef.current);
-      macdRef.current = null;
-      macdSignalRef.current = null;
+    } else if (!indicators.macd && macdHistRef.current && chartRef.current) {
+      chartRef.current.removeSeries(macdHistRef.current);
       macdHistRef.current = null;
+      macdZeroLineRef.current = null;
     }
     requestAnimationFrame(() => recomputePaneOffsets());
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -821,13 +1294,12 @@ export function PriceChart({ symbol, timeframe }: Props) {
     const v = (key: IndicatorKey) => indicators[key] && !hidden[key];
     ema20Ref.current?.applyOptions({ visible: v("ema20") });
     ema50Ref.current?.applyOptions({ visible: v("ema50") });
+    ema150Ref.current?.applyOptions({ visible: v("ema150") });
     ema200Ref.current?.applyOptions({ visible: v("ema200") });
     smaRef.current?.applyOptions({ visible: v("sma") });
     if (rsiRef.current) rsiRef.current.applyOptions({ visible: v("rsi") });
-    if (rsi30Ref.current) rsi30Ref.current.applyOptions({ visible: v("rsi") });
-    if (rsi70Ref.current) rsi70Ref.current.applyOptions({ visible: v("rsi") });
-    if (macdRef.current) macdRef.current.applyOptions({ visible: v("macd") });
-    if (macdSignalRef.current) macdSignalRef.current.applyOptions({ visible: v("macd") });
+    if (rsiMaRef.current) rsiMaRef.current.applyOptions({ visible: v("rsi") });
+    rsiBandRef.current?.setColor(v("rsi") ? RSI_BAND_COLOR : "transparent");
     if (macdHistRef.current) macdHistRef.current.applyOptions({ visible: v("macd") });
     if (volumeSeriesRef.current) volumeSeriesRef.current.applyOptions({ visible: v("volume") });
   }, [indicators, hidden]);
@@ -835,7 +1307,7 @@ export function PriceChart({ symbol, timeframe }: Props) {
   // Recompute indicators when config changes (periods)
   useEffect(() => {
     updateEMAs();
-  }, [config.ema20, config.ema50, config.ema200]);
+  }, [config.ema20, config.ema50, config.ema150, config.ema200]);
 
   useEffect(() => {
     updateSMA();
@@ -885,71 +1357,143 @@ export function PriceChart({ symbol, timeframe }: Props) {
     }
   }, [priceLines, symbol]);
 
-  // Sync trend lines from store to the chart
+  // Sync trend lines from the store to series primitives (one primitive per line)
   useEffect(() => {
-    if (!chartRef.current) return;
-    const map = trendSeriesMapRef.current;
+    const series = candleSeriesRef.current;
+    if (!series) return;
+    const map = trendPrimitivesRef.current;
     const linesForThisSymbol = trendLines.filter((t) => t.symbol === symbol);
     const activeIds = new Set(linesForThisSymbol.map((t) => t.id));
 
-    for (const [id, series] of map.entries()) {
+    for (const [id, prim] of map.entries()) {
       if (!activeIds.has(id)) {
         try {
-          chartRef.current.removeSeries(series);
+          series.detachPrimitive(prim);
         } catch {}
         map.delete(id);
       }
     }
     for (const tl of linesForThisSymbol) {
-      let series = map.get(tl.id);
-      if (!series) {
-        series = chartRef.current.addSeries(LineSeries, {
-          color: tl.color,
-          lineWidth: 2,
-          priceLineVisible: false,
-          lastValueVisible: false,
-        });
-        map.set(tl.id, series);
-      } else {
-        series.applyOptions({ color: tl.color });
+      let prim = map.get(tl.id);
+      if (!prim) {
+        prim = new TrendLinePrimitive((t) => timeToXRef.current(t));
+        series.attachPrimitive(prim);
+        map.set(tl.id, prim);
       }
-      const points = computeExtendedPoints(tl);
-      series.setData(points.map((p) => ({ time: p.time as UTCTimestamp, value: p.price })));
+      prim.setData({ a: tl.a, b: tl.b, color: tl.color, extend: tl.extend });
     }
-    // renderTick — extended (ray) lines need their endpoints recomputed as the visible range pans/zooms
-  }, [trendLines, symbol, renderTick]);
+  }, [trendLines, symbol]);
 
-  // Sync the in-progress trend-line draft to the (pre-created, always-mounted) preview series.
-  // Chart/series mutations must stay out of subscribeClick/subscribeCrosshairMove — doing them
-  // there was silently breaking the chart's own next click.
+  // Sync the in-progress trend-line draft to the preview primitive (deferred a frame — updating
+  // the chart synchronously inside the crosshair-move dispatch re-enters it)
   useEffect(() => {
-    const series = previewTrendSeriesRef.current;
-    if (!series) return;
-    // Deferred to the next frame — calling setData synchronously here (inside the
-    // effect triggered by subscribeCrosshairMove's setTrendDraft) re-enters the
-    // chart's crosshair-move dispatch and causes an infinite update loop.
+    const prim = previewTrendRef.current;
+    if (!prim) return;
     const raf = requestAnimationFrame(() => {
-      if (trendDraft.phase === "placing" && trendDraft.a && trendDraft.b) {
-        if (trendDraft.a.time === trendDraft.b.time) {
-          series.setData([{ time: trendDraft.a.time as UTCTimestamp, value: trendDraft.a.price }]);
-        } else {
-          const points = [trendDraft.a, trendDraft.b].sort((x, y) => x.time - y.time);
-          series.setData(points.map((p) => ({ time: p.time as UTCTimestamp, value: p.price })));
-        }
-        series.applyOptions({ visible: true });
-      } else {
-        series.setData([]);
-        series.applyOptions({ visible: false });
-      }
+      prim.setData(
+        trendDraft.phase === "placing" && trendDraft.a && trendDraft.b
+          ? { a: trendDraft.a, b: trendDraft.b, color: TV_COLORS.blue, extend: DEFAULT_TRENDLINE_EXTEND }
+          : null,
+      );
     });
     return () => cancelAnimationFrame(raf);
   }, [trendDraft]);
+
+  // Sync rectangles from the store to series primitives (one primitive per rectangle)
+  useEffect(() => {
+    const series = candleSeriesRef.current;
+    if (!series) return;
+    const map = rectPrimitivesRef.current;
+    const forThisSymbol = rectangles.filter((r) => r.symbol === symbol);
+    const activeIds = new Set(forThisSymbol.map((r) => r.id));
+
+    for (const [id, prim] of map.entries()) {
+      if (!activeIds.has(id)) {
+        try {
+          series.detachPrimitive(prim);
+        } catch {}
+        map.delete(id);
+      }
+    }
+    for (const r of forThisSymbol) {
+      let prim = map.get(r.id);
+      if (!prim) {
+        prim = new RectanglePrimitive();
+        series.attachPrimitive(prim);
+        map.set(r.id, prim);
+      }
+      prim.setData({ a: r.a, b: r.b, color: r.color, fillColor: r.fillColor });
+      prim.setSelected(r.id === selectedRectangleId);
+    }
+  }, [rectangles, symbol, selectedRectangleId]);
+
+  // Sync the in-progress rectangle draft to the preview primitive. Deferred a frame for the same
+  // reason as the trend-line preview: it's driven by subscribeCrosshairMove.
+  useEffect(() => {
+    const prim = previewRectRef.current;
+    if (!prim) return;
+    const raf = requestAnimationFrame(() => {
+      prim.setData(
+        rectDraft.phase === "placing" && rectDraft.a && rectDraft.b
+          ? {
+              a: rectDraft.a,
+              b: rectDraft.b,
+              color: DEFAULT_TRENDLINE_COLOR,
+              fillColor: DEFAULT_TRENDLINE_COLOR,
+            }
+          : null,
+      );
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [rectDraft]);
+
+  // Sync arrows from the store to series primitives (one primitive per arrow)
+  useEffect(() => {
+    const series = candleSeriesRef.current;
+    if (!series) return;
+    const map = arrowPrimitivesRef.current;
+    const forThisSymbol = arrows.filter((ar) => ar.symbol === symbol);
+    const activeIds = new Set(forThisSymbol.map((ar) => ar.id));
+
+    for (const [id, prim] of map.entries()) {
+      if (!activeIds.has(id)) {
+        try {
+          series.detachPrimitive(prim);
+        } catch {}
+        map.delete(id);
+      }
+    }
+    for (const ar of forThisSymbol) {
+      let prim = map.get(ar.id);
+      if (!prim) {
+        prim = new ArrowPrimitive();
+        series.attachPrimitive(prim);
+        map.set(ar.id, prim);
+      }
+      prim.setData({ a: ar.a, b: ar.b, color: ar.color });
+      prim.setSelected(ar.id === selectedArrowId);
+    }
+  }, [arrows, symbol, selectedArrowId]);
+
+  // Sync the in-progress arrow draft to the preview primitive (deferred a frame, like the rectangle)
+  useEffect(() => {
+    const prim = previewArrowRef.current;
+    if (!prim) return;
+    const raf = requestAnimationFrame(() => {
+      prim.setData(
+        arrowDraft.phase === "placing" && arrowDraft.a && arrowDraft.b
+          ? { a: arrowDraft.a, b: arrowDraft.b, color: DEFAULT_TRENDLINE_COLOR }
+          : null,
+      );
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [arrowDraft]);
 
   // Cursor style when drawing tools are active + reset measure/trendline draft on tool change
   useEffect(() => {
     if (containerRef.current) {
       containerRef.current.style.cursor =
-        tool === "hline" || tool === "measure" || tool === "trendline"
+        tool === "hline" || tool === "measure" || tool === "trendline" || tool === "rect" || tool === "arrow"
           ? "crosshair"
           : tool === "text"
             ? "text"
@@ -957,14 +1501,38 @@ export function PriceChart({ symbol, timeframe }: Props) {
     }
     if (tool !== "measure") setMeasure(INITIAL_MEASURE);
     if (tool !== "trendline") setTrendDraft(INITIAL_TREND_DRAFT);
+    if (tool !== "rect") setRectDraft(INITIAL_TREND_DRAFT);
+    if (tool !== "arrow") setArrowDraft(INITIAL_TREND_DRAFT);
     if (tool !== "text") setTextDraft(null);
-    if (tool !== "cursor") setSelectedTrendLineId(null);
+    if (tool !== "cursor") {
+      setSelectedTrendLineId(null);
+      setSelectedRectangleId(null);
+      setSelectedArrowId(null);
+    }
     setMagnetPoint(null);
   }, [tool]);
 
-  // Delete/Backspace removes the selected trend line; Escape deselects it
+  // Escape while a drawing tool is active cancels the drawing in progress and goes back to the
+  // cursor (switching tool resets every draft in the effect above), like TradingView
   useEffect(() => {
-    if (!selectedTrendLineId) return;
+    if (tool === "cursor") return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      const target = e.target as HTMLElement | null;
+      // The text tool's input handles its own Escape
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+        return;
+      }
+      e.preventDefault();
+      setTool("cursor");
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [tool, setTool]);
+
+  // Delete/Backspace removes the selected drawing; Escape deselects it
+  useEffect(() => {
+    if (!selectedTrendLineId && !selectedRectangleId && !selectedArrowId) return;
     function onKeyDown(e: KeyboardEvent) {
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
@@ -973,14 +1541,30 @@ export function PriceChart({ symbol, timeframe }: Props) {
       if (e.key === "Delete" || e.key === "Backspace") {
         e.preventDefault();
         if (selectedTrendLineId) removeTrendLine(selectedTrendLineId);
+        if (selectedRectangleId) removeRectangle(selectedRectangleId);
+        if (selectedArrowId) removeArrow(selectedArrowId);
         setSelectedTrendLineId(null);
+        setSelectedRectangleId(null);
+        setSelectedArrowId(null);
       } else if (e.key === "Escape") {
         setSelectedTrendLineId(null);
+        setSelectedRectangleId(null);
+        setSelectedArrowId(null);
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selectedTrendLineId, removeTrendLine, setSelectedTrendLineId]);
+  }, [
+    selectedTrendLineId,
+    selectedRectangleId,
+    selectedArrowId,
+    removeTrendLine,
+    removeRectangle,
+    removeArrow,
+    setSelectedTrendLineId,
+    setSelectedRectangleId,
+    setSelectedArrowId,
+  ]);
 
   // Capture + download a PNG of the chart whenever a screenshot is requested
   useEffect(() => {
@@ -1005,6 +1589,7 @@ export function PriceChart({ symbol, timeframe }: Props) {
     const cfg = configRef.current;
     let last20: number | undefined;
     let last50: number | undefined;
+    let last150: number | undefined;
     let last200: number | undefined;
 
     if (ema20Ref.current) {
@@ -1021,6 +1606,13 @@ export function PriceChart({ symbol, timeframe }: Props) {
       );
       last50 = data.at(-1)?.value;
     }
+    if (ema150Ref.current) {
+      const data = ema(c, cfg.ema150);
+      ema150Ref.current.setData(
+        data.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })),
+      );
+      last150 = data.at(-1)?.value;
+    }
     if (ema200Ref.current) {
       const data = ema(c, cfg.ema200);
       ema200Ref.current.setData(
@@ -1033,6 +1625,7 @@ export function PriceChart({ symbol, timeframe }: Props) {
       ...prev,
       ema20: last20,
       ema50: last50,
+      ema150: last150,
       ema200: last200,
       volume: lastVol,
     }));
@@ -1058,36 +1651,34 @@ export function PriceChart({ symbol, timeframe }: Props) {
       value: p.value,
     }));
     rsiRef.current.setData(data);
-    if (rsi30Ref.current && data.length > 0)
-      rsi30Ref.current.setData([
-        { time: data[0].time, value: 30 },
-        { time: data[data.length - 1].time, value: 30 },
-      ]);
-    if (rsi70Ref.current && data.length > 0)
-      rsi70Ref.current.setData([
-        { time: data[0].time, value: 70 },
-        { time: data[data.length - 1].time, value: 70 },
-      ]);
-    setLastValues((prev) => ({ ...prev, rsi: data.at(-1)?.value }));
+    const maData = smaOfPoints(data, RSI_MA_PERIOD).map((p) => ({
+      time: p.time as UTCTimestamp,
+      value: p.value,
+    }));
+    rsiMaRef.current?.setData(maData);
+    setLastValues((prev) => ({ ...prev, rsi: data.at(-1)?.value, rsiMa: maData.at(-1)?.value }));
   }
 
   function updateMACD() {
     const c = candlesRef.current;
-    if (c.length === 0 || !macdRef.current) return;
+    if (c.length === 0 || !macdHistRef.current) return;
     const cfg = configRef.current;
     const m = macd(c, cfg.macdFast, cfg.macdSlow, cfg.macdSignal);
-    macdRef.current.setData(
-      m.map((p) => ({ time: p.time as UTCTimestamp, value: p.macd })),
-    );
-    macdSignalRef.current?.setData(
-      m.map((p) => ({ time: p.time as UTCTimestamp, value: p.signal })),
-    );
-    macdHistRef.current?.setData(
-      m.map((p) => ({
-        time: p.time as UTCTimestamp,
-        value: p.histogram,
-        color: p.histogram >= 0 ? `${TV_COLORS.green}80` : `${TV_COLORS.red}80`,
-      })),
+    // Strong color while the bars grow away from zero, light while momentum fades
+    const weak = paletteRef.current.histWeak;
+    macdHistRef.current.setData(
+      m.map((p, i) => {
+        const prev = i > 0 ? m[i - 1].histogram : p.histogram;
+        const growing = Math.abs(p.histogram) >= Math.abs(prev);
+        return {
+          time: p.time as UTCTimestamp,
+          value: p.histogram,
+          color:
+            p.histogram >= 0
+              ? growing ? MACD_HIST_COLORS.up : weak
+              : growing ? MACD_HIST_COLORS.down : weak,
+        };
+      }),
     );
     const last = m.at(-1);
     setLastValues((prev) => ({
@@ -1203,6 +1794,7 @@ export function PriceChart({ symbol, timeframe }: Props) {
         updateRSI();
         updateMACD();
         updateSR();
+        setCandlesVersion((v) => v + 1);
         chartRef.current?.timeScale().fitContent();
         requestAnimationFrame(() => recomputePaneOffsets());
 
@@ -1250,9 +1842,23 @@ export function PriceChart({ symbol, timeframe }: Props) {
 
   function commitTextDraft() {
     const d = textDraftRef.current;
-    if (d && d.value.trim()) {
-      addTextAnnotationRef.current(d.time, d.price, d.value.trim(), symbolRef.current);
+    // Cleared right away so the blur that follows Enter/Escape doesn't commit a second time
+    textDraftRef.current = null;
+    if (d) {
+      const value = d.value.trim();
+      if (d.id) {
+        // Emptying an existing text deletes it
+        if (value) updateTextAnnotation(d.id, { text: value });
+        else removeTextAnnotation(d.id);
+      } else if (value) {
+        addTextAnnotationRef.current(d.time, d.price, value, symbolRef.current);
+      }
     }
+    setTextDraft(null);
+  }
+
+  function cancelTextDraft() {
+    textDraftRef.current = null;
     setTextDraft(null);
   }
 
@@ -1318,13 +1924,16 @@ export function PriceChart({ symbol, timeframe }: Props) {
   if (tool === "cursor" && selectedTrendLineId && chartRef.current && candleSeriesRef.current) {
     const selected = trendLines.find((t) => t.id === selectedTrendLineId && t.symbol === symbol);
     if (selected) {
-      const ts = chartRef.current.timeScale();
-      const ax = ts.timeToCoordinate(selected.a.time as UTCTimestamp);
-      const ay = candleSeriesRef.current.priceToCoordinate(selected.a.price);
-      const bx = ts.timeToCoordinate(selected.b.time as UTCTimestamp);
-      const by = candleSeriesRef.current.priceToCoordinate(selected.b.price);
-      if (ax !== null && ay !== null && bx !== null && by !== null) {
-        const midX = (ax + bx) / 2;
+      // From the store's points — the primitive's own data is only synced after this render
+      const anchors = trendPrimitivesRef.current.get(selected.id)?.getAnchors(selected.a, selected.b);
+      if (anchors) {
+        const { ax, ay, bx, by } = anchors;
+        // Toolbar over the on-screen part of the segment (an anchor may be far off-screen)
+        const paneW = chartRef.current.timeScale().width();
+        const visL = Math.max(0, Math.min(ax, bx));
+        const visR = Math.min(paneW, Math.max(ax, bx));
+        const midX = visL <= visR ? (visL + visR) / 2 : (ax + bx) / 2;
+        const midY = bx === ax ? Math.min(ay, by) : ay + ((by - ay) * (midX - ax)) / (bx - ax);
         const color = selected.color;
         const extendLeft = selected.extend === "left" || selected.extend === "both";
         const extendRight = selected.extend === "right" || selected.extend === "both";
@@ -1361,8 +1970,8 @@ export function PriceChart({ symbol, timeframe }: Props) {
 
         trendLineToolbarRender = (
           <TrendLineToolbar
-            x={midX}
-            y={Math.min(ay, by) - 44}
+            x={Math.max(100, Math.min(paneW - 100, midX))}
+            y={Math.max(4, midY - 44)}
             color={color}
             extendLeft={extendLeft}
             extendRight={extendRight}
@@ -1373,6 +1982,7 @@ export function PriceChart({ symbol, timeframe }: Props) {
             onToggleExtendRight={() =>
               updateTrendLine(selected.id, { extend: toExtend(extendLeft, !extendRight) })
             }
+            onClone={() => cloneTrendLine(selected.id)}
             onDelete={() => {
               removeTrendLine(selected.id);
               setSelectedTrendLineId(null);
@@ -1383,10 +1993,53 @@ export function PriceChart({ symbol, timeframe }: Props) {
     }
   }
 
+  let rectangleToolbarRender: React.ReactNode = null;
+  if (tool === "cursor" && selectedRectangleId) {
+    const selected = rectangles.find((r) => r.id === selectedRectangleId && r.symbol === symbol);
+    const box = rectPrimitivesRef.current.get(selectedRectangleId)?.getBox();
+    if (selected && box) {
+      rectangleToolbarRender = (
+        <RectangleToolbar
+          x={(box.left + box.right) / 2}
+          y={Math.max(4, box.top - 72)}
+          color={selected.color}
+          fillColor={selected.fillColor}
+          onColorChange={(c) => updateRectangle(selected.id, { color: c })}
+          onFillColorChange={(c) => updateRectangle(selected.id, { fillColor: c })}
+          onDelete={() => {
+            removeRectangle(selected.id);
+            setSelectedRectangleId(null);
+          }}
+        />
+      );
+    }
+  }
+
+  let arrowToolbarRender: React.ReactNode = null;
+  if (tool === "cursor" && selectedArrowId) {
+    const selected = arrows.find((ar) => ar.id === selectedArrowId && ar.symbol === symbol);
+    const seg = arrowPrimitivesRef.current.get(selectedArrowId)?.getSegment();
+    if (selected && seg) {
+      arrowToolbarRender = (
+        <ArrowToolbar
+          x={(seg.ax + seg.bx) / 2}
+          y={Math.max(4, Math.min(seg.ay, seg.by) - 44)}
+          color={selected.color}
+          onColorChange={(c) => updateArrow(selected.id, { color: c })}
+          onDelete={() => {
+            removeArrow(selected.id);
+            setSelectedArrowId(null);
+          }}
+        />
+      );
+    }
+  }
+
   const textAnnotationRenders: React.ReactNode[] = [];
   if (chartRef.current && candleSeriesRef.current) {
     const ts = chartRef.current.timeScale();
     for (const t of textAnnotations.filter((a) => a.symbol === symbol)) {
+      if (textDraft?.id === t.id) continue; // the edit input is drawn in its place
       const x = ts.timeToCoordinate(t.time as UTCTimestamp);
       const y = candleSeriesRef.current.priceToCoordinate(t.price);
       if (x === null || y === null) continue;
@@ -1394,7 +2047,10 @@ export function PriceChart({ symbol, timeframe }: Props) {
         <div
           key={t.id}
           style={{ left: x, top: y }}
-          className="pointer-events-none absolute z-10 -translate-y-1/2 translate-x-1 whitespace-nowrap rounded border border-tv-border bg-tv-panel/90 px-1.5 py-0.5 text-xs text-tv-text"
+          onPointerDown={(e) => startDragText(e, t.id)}
+          onDoubleClick={() => setTextDraft({ id: t.id, time: t.time, price: t.price, value: t.text })}
+          title="Arrastrar para mover · doble clic para editar"
+          className="absolute z-10 cursor-move touch-none select-none -translate-y-1/2 translate-x-1 whitespace-nowrap rounded border border-tv-border bg-tv-panel/90 px-1.5 py-0.5 text-xs text-tv-text"
         >
           {t.text}
         </div>,
@@ -1415,7 +2071,7 @@ export function PriceChart({ symbol, timeframe }: Props) {
           onChange={(e) => setTextDraft((d) => (d ? { ...d, value: e.target.value } : d))}
           onKeyDown={(e) => {
             if (e.key === "Enter") commitTextDraft();
-            if (e.key === "Escape") setTextDraft(null);
+            if (e.key === "Escape") cancelTextDraft();
           }}
           onBlur={commitTextDraft}
           placeholder="Texto…"
@@ -1441,17 +2097,236 @@ export function PriceChart({ symbol, timeframe }: Props) {
     }
   }
 
+  // Events are drawn as HTML badges in a strip at the bottom of the main pane (like
+  // TradingView), not as series markers on the candles. candlesVersion keeps it in sync.
+  void candlesVersion;
+  eventsByCandleRef.current = bucketEventsByCandle(
+    (stockEvents?.events ?? []).filter((e) => eventToggles[e.type]),
+    candlesRef.current.map((c) => c.time),
+  );
+  // Bottom strip of the main pane holding the event badges
+  const mainPane = paneOffsets[0];
+  const eventStripY = mainPane ? mainPane.top + mainPane.height - EVENT_STRIP_OFFSET : null;
+  const eventBadgeRenders: React.ReactNode[] = [];
+  if (chartRef.current && eventStripY !== null && eventsByCandleRef.current.size > 0) {
+    const ts = chartRef.current.timeScale();
+    const width = ts.width();
+    for (const [time, list] of eventsByCandleRef.current) {
+      const x = ts.timeToCoordinate(time as UTCTimestamp);
+      if (x === null || x < 0 || x > width) continue;
+      // One badge per event type per candle (weekly/monthly candles can hold several dividends)
+      const types = [...new Set(list.map((e) => e.type))];
+      types.forEach((type, i) => {
+        eventBadgeRenders.push(
+          <div
+            key={`${time}-${type}`}
+            style={{
+              left: x,
+              top: eventStripY - i * (EVENT_BADGE_SIZE + 2),
+              width: EVENT_BADGE_SIZE,
+              height: EVENT_BADGE_SIZE,
+              backgroundColor: EVENT_STYLE[type].color,
+            }}
+            className="pointer-events-none absolute z-10 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full text-[9px] font-bold leading-none text-white opacity-90"
+          >
+            {EVENT_STYLE[type].letter}
+          </div>,
+        );
+      });
+    }
+  }
+
+  // News: one lightning badge per candle, stacked above that candle's event badges. Stories newer
+  // than the last candle (e.g. weekend news on a daily chart) go on the last candle.
+  const newsBadgeRenders: React.ReactNode[] = [];
+  const candleTimes = candlesRef.current.map((c) => c.time);
+  if (
+    chartRef.current &&
+    eventStripY !== null &&
+    eventToggles.news &&
+    stockNews &&
+    stockNews.length > 0 &&
+    candleTimes.length > 0
+  ) {
+    const lastTime = candleTimes[candleTimes.length - 1];
+    const newsByCandle = bucketEventsByCandle(
+      stockNews.map((item) => ({ time: Math.min(item.time, lastTime), item })),
+      candleTimes,
+    );
+    const ts = chartRef.current.timeScale();
+    const width = ts.width();
+    // Candles closer than a badge width (intraday, zoomed out) share one badge, placed on the
+    // most recent of them, so the icons never pile on top of each other
+    const groups: { time: number; x: number; items: NewsItem[] }[] = [];
+    for (const [time, list] of [...newsByCandle.entries()].sort((a, b) => a[0] - b[0])) {
+      const x = ts.timeToCoordinate(time as UTCTimestamp);
+      if (x === null || x < 0 || x > width) continue;
+      const prev = groups[groups.length - 1];
+      if (prev && x - prev.x < EVENT_BADGE_SIZE + 2) {
+        prev.time = time;
+        prev.x = x;
+        prev.items.push(...list.map((n) => n.item));
+      } else {
+        groups.push({ time, x, items: list.map((n) => n.item) });
+      }
+    }
+    for (const { time, x, items: groupItems } of groups) {
+      const items = groupItems.sort((a, b) => b.time - a.time);
+      const stack = new Set(eventsByCandleRef.current.get(time)?.map((e) => e.type)).size;
+      const isOpen = openNews?.time === time;
+      const expanded = isOpen && openNews.expanded;
+      const shown = expanded ? items : items.slice(0, 1);
+      // Open toward whichever side has room, like the event tooltip
+      const cardSide = x > width / 2 ? { right: -EVENT_BADGE_SIZE / 2 } : { left: -EVENT_BADGE_SIZE / 2 };
+      newsBadgeRenders.push(
+        <div
+          key={`news-${time}`}
+          style={{
+            left: x,
+            top: eventStripY - stack * (EVENT_BADGE_SIZE + 2),
+            width: EVENT_BADGE_SIZE,
+            height: EVENT_BADGE_SIZE,
+          }}
+          onMouseEnter={() => setOpenNews((cur) => (cur?.time === time ? cur : { time, expanded: false }))}
+          onMouseLeave={() => setOpenNews((cur) => (cur?.time === time ? null : cur))}
+          className={cn("absolute -translate-x-1/2 -translate-y-1/2", isOpen ? "z-40" : "z-10")}
+        >
+          <div
+            style={{ backgroundColor: NEWS_COLOR }}
+            className="flex h-full w-full cursor-pointer items-center justify-center rounded-full text-white opacity-90"
+          >
+            <Zap className="h-2.5 w-2.5" fill="currentColor" />
+          </div>
+          {isOpen && (
+            // Bottom padding bridges the gap to the badge so the pointer can move onto the card
+            <div style={{ ...cardSide, bottom: EVENT_BADGE_SIZE / 2 }} className="absolute w-80 pb-3">
+              <div
+                style={{ borderLeftColor: NEWS_COLOR }}
+                className="rounded-md border border-l-4 border-tv-border bg-tv-panel p-3 shadow-xl"
+              >
+                <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-tv-text">
+                  <span
+                    style={{ color: NEWS_COLOR, borderColor: NEWS_COLOR }}
+                    className="flex h-5 w-5 items-center justify-center rounded-full border-2"
+                  >
+                    <Zap className="h-3 w-3" fill="currentColor" />
+                  </span>
+                  Últimas actualizaciones
+                </div>
+                <div className={cn("flex flex-col gap-2.5", expanded && "max-h-72 overflow-y-auto pr-1")}>
+                  {shown.map((n) => (
+                    <a
+                      key={n.id}
+                      href={n.link}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={n.originalTitle}
+                      className="group block"
+                    >
+                      <div className="text-[11px] text-tv-text-muted">
+                        {timeAgo(n.time)} · {n.publisher}
+                      </div>
+                      <div className="text-xs leading-snug text-tv-text group-hover:text-tv-blue">
+                        {n.title}
+                      </div>
+                    </a>
+                  ))}
+                </div>
+                {items.length > 1 && (
+                  <button
+                    onClick={() => setOpenNews({ time, expanded: !expanded })}
+                    className="mt-2 flex items-center gap-0.5 text-[11px] text-tv-text-muted hover:text-tv-text"
+                  >
+                    {expanded ? "Ver menos" : `Ver todos (${items.length})`}
+                    {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>,
+      );
+    }
+  }
+
+  let eventTooltipRender: React.ReactNode = null;
+  const hoveredEvents = hover ? eventsByCandleRef.current.get(hover.time) : undefined;
+  if (hover && hoveredEvents && chartRef.current && eventStripY !== null) {
+    const x = chartRef.current.timeScale().timeToCoordinate(hover.time as UTCTimestamp);
+    if (x !== null) {
+      // Open toward whichever side has room so it never slides under the price scale / sidebar
+      const width = containerRef.current?.clientWidth ?? 0;
+      const side = x > width / 2 ? { right: width - x + 10 } : { left: x + 10 };
+      eventTooltipRender = (
+        <div
+          style={{ ...side, bottom: (containerRef.current?.clientHeight ?? 0) - eventStripY + EVENT_BADGE_SIZE }}
+          className="pointer-events-none absolute z-20 rounded border border-tv-border bg-tv-panel px-2 py-1.5 text-[11px] shadow-lg"
+        >
+          {hoveredEvents.map((e, i) => (
+            <div key={i} className="flex items-center gap-2 whitespace-nowrap">
+              <span
+                className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full text-[8px] font-bold text-white"
+                style={{ backgroundColor: EVENT_STYLE[e.type].color }}
+              >
+                {EVENT_STYLE[e.type].letter}
+              </span>
+              <span className="text-tv-text">{describeEvent(e)}</span>
+              <span className="text-tv-text-muted">
+                {new Date(e.time * 1000).toLocaleDateString("es-AR")}
+              </span>
+            </div>
+          ))}
+        </div>
+      );
+    }
+  }
+
   void renderTick;
 
   return (
     <div className="relative h-full w-full">
-      <div ref={containerRef} className="h-full w-full" />
+      <div
+        ref={containerRef}
+        onMouseDownCapture={handleChartMouseDown}
+        className="h-full w-full"
+      />
       {measureRender}
       {trendLineHandlesRender}
       {trendLineToolbarRender}
+      {rectangleToolbarRender}
+      {arrowToolbarRender}
       {textAnnotationRenders}
       {textDraftRender}
       {magnetMarkerRender}
+      {eventBadgeRenders}
+      {newsBadgeRenders}
+
+      {/* Log-scale toggle at the bottom of the main pane's price axis, like TradingView */}
+      {mainPane && chartRef.current && (
+        <button
+          onClick={() => setScaleMode(scaleMode === "exponential" ? "linear" : "exponential")}
+          style={{
+            top: mainPane.top + mainPane.height - 22,
+            right: 0,
+            width: chartRef.current.priceScale("right").width(),
+          }}
+          title="Escala logarítmica (Alt+L)"
+          aria-pressed={scaleMode === "exponential"}
+          className="absolute z-10 flex h-5 items-center justify-center"
+        >
+          <span
+            className={cn(
+              "rounded px-1.5 text-[10px] font-semibold leading-4",
+              scaleMode === "exponential"
+                ? "bg-tv-blue text-white"
+                : "text-tv-text-muted hover:bg-tv-panel-hover hover:text-tv-text",
+            )}
+          >
+            LOG
+          </span>
+        </button>
+      )}
+      {eventTooltipRender}
 
       {/* Top-left of main pane: symbol info + OHLC + Volume pill + EMA pills */}
       <div
@@ -1476,6 +2351,18 @@ export function PriceChart({ symbol, timeframe }: Props) {
             <span className="text-tv-text-muted">
               {market === "stock" ? "Yahoo Finance" : "Binance"}
             </span>
+            {market === "stock" && eventToggles.earnings && stockEvents?.nextEarnings && (
+              <>
+                <span className="text-tv-text-muted">·</span>
+                <span className="font-normal" style={{ color: EVENT_STYLE.earnings.color }}>
+                  Próx. resultados{" "}
+                  {new Date(stockEvents.nextEarnings.time * 1000).toLocaleDateString("es-AR", {
+                    day: "numeric",
+                    month: "short",
+                  })}
+                </span>
+              </>
+            )}
           </div>
           {hover && (
             <div className="flex items-center gap-x-3 text-[11px]">
@@ -1543,6 +2430,17 @@ export function PriceChart({ symbol, timeframe }: Props) {
               onRemove={() => removeIndicator("ema50")}
             />
           )}
+          {indicators.ema150 && (
+            <IndicatorPill
+              name={`EMA ${config.ema150}`}
+              value={lastValues.ema150 !== undefined ? formatPrice(lastValues.ema150) : undefined}
+              color={INDICATOR_COLORS.ema150}
+              hidden={hidden.ema150}
+              onToggleHide={() => toggleHidden("ema150")}
+              onSettings={() => setSettingsTarget("ema150")}
+              onRemove={() => removeIndicator("ema150")}
+            />
+          )}
           {indicators.ema200 && (
             <IndicatorPill
               name={`EMA ${config.ema200}`}
@@ -1586,8 +2484,17 @@ export function PriceChart({ symbol, timeframe }: Props) {
           className="pointer-events-none absolute z-10"
         >
           <IndicatorPill
-            name={`RSI ${config.rsi}`}
-            value={lastValues.rsi !== undefined ? lastValues.rsi.toFixed(2) : undefined}
+            name={`RSI ${config.rsi} close`}
+            value={
+              lastValues.rsi !== undefined ? (
+                <>
+                  <span style={{ color: INDICATOR_COLORS.rsi }}>{lastValues.rsi.toFixed(2)}</span>{" "}
+                  {lastValues.rsiMa !== undefined && (
+                    <span style={{ color: RSI_MA_COLOR }}>{lastValues.rsiMa.toFixed(2)}</span>
+                  )}
+                </>
+              ) : undefined
+            }
             color={INDICATOR_COLORS.rsi}
             hidden={hidden.rsi}
             onToggleHide={() => toggleHidden("rsi")}
@@ -1606,11 +2513,17 @@ export function PriceChart({ symbol, timeframe }: Props) {
           <IndicatorPill
             name={`MACD ${config.macdFast}, ${config.macdSlow}, ${config.macdSignal}`}
             value={
-              lastValues.macd !== undefined
-                ? `${lastValues.macd.toFixed(2)} / ${(lastValues.macdSignal ?? 0).toFixed(2)}`
-                : undefined
+              lastValues.macdHist !== undefined ? (
+                <span
+                  style={{
+                    color: lastValues.macdHist >= 0 ? MACD_HIST_COLORS.up : MACD_HIST_COLORS.down,
+                  }}
+                >
+                  {lastValues.macdHist.toFixed(2)}
+                </span>
+              ) : undefined
             }
-            color={INDICATOR_COLORS.macd}
+            color={MACD_HIST_COLORS.up}
             hidden={hidden.macd}
             onToggleHide={() => toggleHidden("macd")}
             onSettings={() => setSettingsTarget("macd")}

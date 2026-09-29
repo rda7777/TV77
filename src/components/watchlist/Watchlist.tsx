@@ -29,6 +29,8 @@ import { Button } from "@/components/ui/button";
 import { formatPrice, formatPct } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
+const STOCK_POLL_MS = 3000;
+
 interface Row {
   symbol: string;
   price: number;
@@ -64,6 +66,7 @@ export function Watchlist() {
   const notes = useChartStore((s) => s.notes);
   const setNote = useChartStore((s) => s.setNote);
   const reorderSymbol = useChartStore((s) => s.reorderSymbol);
+  const moveSymbolToSection = useChartStore((s) => s.moveSymbolToSection);
   const setSectionSymbols = useChartStore((s) => s.setSectionSymbols);
 
   const [rows, setRows] = useState<Record<string, Row>>({});
@@ -72,10 +75,15 @@ export function Watchlist() {
   const [promptValue, setPromptValue] = useState("");
   const [noteTarget, setNoteTarget] = useState<string | null>(null);
   const [noteValue, setNoteValue] = useState("");
-  const [dragItem, setDragItem] = useState<{ sectionId: string; index: number } | null>(null);
+  const [dragItem, setDragItem] = useState<{
+    sectionId: string;
+    index: number;
+    symbol: string;
+  } | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<{ sectionId: string; index: number } | null>(
     null,
   );
+  const [dragOverSection, setDragOverSection] = useState<string | null>(null);
 
   const allSymbols = useMemo(
     () => activeList?.sections.flatMap((sec) => sec.symbols) ?? [],
@@ -122,27 +130,54 @@ export function Watchlist() {
       });
     }
 
+    // No free real-time stream for stocks — poll quotes fast while the tab is visible
+    let stockInFlight = false;
+    const pollStocks = () => {
+      if (stockInFlight || document.hidden) return;
+      stockInFlight = true;
+      fetchStockQuotes(stockSymbols)
+        .then((quotes) => {
+          if (cancelled) return;
+          quotes.forEach((q) => updateRow(q.symbol, q.lastPrice, q.priceChangePercent));
+        })
+        .catch(console.error)
+        .finally(() => {
+          stockInFlight = false;
+        });
+    };
     if (stockSymbols.length > 0) {
-      const pollStocks = () => {
-        fetchStockQuotes(stockSymbols)
-          .then((quotes) => {
-            if (cancelled) return;
-            quotes.forEach((q) => updateRow(q.symbol, q.lastPrice, q.priceChangePercent));
-          })
-          .catch(console.error);
-      };
       pollStocks();
-      stockPollTimer = setInterval(pollStocks, 15000);
+      stockPollTimer = setInterval(pollStocks, STOCK_POLL_MS);
+      document.addEventListener("visibilitychange", pollStocks);
     }
 
     return () => {
       cancelled = true;
       if (unsubWs) unsubWs();
       if (stockPollTimer) clearInterval(stockPollTimer);
+      document.removeEventListener("visibilitychange", pollStocks);
     };
   }, [allSymbols]);
 
   if (!activeList) return null;
+
+  function handleDrop(targetSectionId: string, targetIndex: number) {
+    if (!dragItem) return;
+    if (dragItem.sectionId === targetSectionId) {
+      reorderSymbol(activeList.id, targetSectionId, dragItem.index, targetIndex);
+    } else {
+      moveSymbolToSection(
+        activeList.id,
+        dragItem.sectionId,
+        targetSectionId,
+        dragItem.symbol,
+        targetIndex,
+      );
+    }
+    setDragItem(null);
+    setDragOverIndex(null);
+    setDragOverSection(null);
+  }
 
   function openPrompt(mode: PromptMode) {
     setPromptValue(
@@ -229,7 +264,7 @@ export function Watchlist() {
         <div className="flex items-center gap-1">
           <button
             onClick={() => {
-              setAddSymbolTargetSection(null);
+              setAddSymbolTargetSection(activeList.sections[0].id);
               openSymbolDialog(true);
             }}
             className="rounded p-1 text-tv-text-muted hover:bg-tv-panel-hover hover:text-tv-text"
@@ -286,8 +321,28 @@ export function Watchlist() {
       <ScrollArea className="min-h-0 flex-1">
         <div className="flex flex-col">
           {activeList.sections.map((section) => (
-            <div key={section.id}>
-              <div className="group/section flex items-center justify-between border-b border-tv-border bg-tv-panel px-3 py-1 text-[10px]">
+            <div
+              key={section.id}
+              onDragOver={(e) => {
+                if (!dragItem) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+                if (dragItem.sectionId !== section.id) setDragOverSection(section.id);
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                handleDrop(section.id, section.symbols.length);
+              }}
+              onDragLeave={() => {
+                setDragOverSection((cur) => (cur === section.id ? null : cur));
+              }}
+            >
+              <div
+                className={cn(
+                  "group/section flex items-center justify-between border-b border-tv-border bg-tv-panel px-3 py-1 text-[10px]",
+                  dragOverSection === section.id && "bg-tv-blue/10",
+                )}
+              >
                 <button
                   onClick={() => toggleSectionCollapsed(activeList.id, section.id)}
                   className="flex items-center gap-1 text-tv-text-muted hover:text-tv-text"
@@ -410,25 +465,25 @@ export function Watchlist() {
                       draggable
                       onDragStart={(e) => {
                         e.dataTransfer.effectAllowed = "move";
-                        setDragItem({ sectionId: section.id, index });
+                        setDragItem({ sectionId: section.id, index, symbol: s });
                       }}
                       onDragOver={(e) => {
-                        if (!dragItem || dragItem.sectionId !== section.id) return;
+                        if (!dragItem) return;
                         e.preventDefault();
+                        e.stopPropagation();
                         e.dataTransfer.dropEffect = "move";
                         setDragOverIndex({ sectionId: section.id, index });
+                        setDragOverSection(null);
                       }}
                       onDrop={(e) => {
                         e.preventDefault();
-                        if (dragItem && dragItem.sectionId === section.id) {
-                          reorderSymbol(activeList.id, section.id, dragItem.index, index);
-                        }
-                        setDragItem(null);
-                        setDragOverIndex(null);
+                        e.stopPropagation();
+                        handleDrop(section.id, index);
                       }}
                       onDragEnd={() => {
                         setDragItem(null);
                         setDragOverIndex(null);
+                        setDragOverSection(null);
                       }}
                       className={cn(
                         "group grid cursor-pointer grid-cols-[auto_1fr_auto_auto] items-center gap-2 px-3 py-1.5 text-xs transition-colors",
@@ -514,7 +569,12 @@ export function Watchlist() {
                   );
                 })}
               {!section.collapsed && section.symbols.length === 0 && (
-                <div className="px-3 py-2 text-center text-[11px] text-tv-text-muted">
+                <div
+                  className={cn(
+                    "px-3 py-2 text-center text-[11px] text-tv-text-muted",
+                    dragOverSection === section.id && "border-t-2 border-tv-blue",
+                  )}
+                >
                   Sin símbolos
                 </div>
               )}

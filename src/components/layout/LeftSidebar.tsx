@@ -1,6 +1,6 @@
 "use client";
 
-import { MousePointer2, Minus, TrendingUp, Ruler, Type, Magnet, Trash2, Lock } from "lucide-react";
+import { MousePointer2, Minus, TrendingUp, Square, MoveUpRight, Ruler, Type, Magnet, Trash2, Lock } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useChartStore, type DrawingTool } from "@/lib/store/chart-store";
 import { cn } from "@/lib/utils";
@@ -27,6 +27,18 @@ const TOOLS: ToolDef[] = [
     hint: "Click en dos puntos para trazar una línea entre ellos",
   },
   {
+    key: "rect",
+    icon: Square,
+    label: "Rectángulo",
+    hint: "Click en dos esquinas opuestas para dibujar un rectángulo",
+  },
+  {
+    key: "arrow",
+    icon: MoveUpRight,
+    label: "Flecha",
+    hint: "Click en el origen y luego en el punto al que apunta",
+  },
+  {
     key: "measure",
     icon: Ruler,
     label: "Regla / Medir",
@@ -49,6 +61,8 @@ export function LeftSidebar() {
   const toggleMagnet = useChartStore((s) => s.toggleMagnet);
   const clearPriceLines = useChartStore((s) => s.clearPriceLines);
   const clearTrendLines = useChartStore((s) => s.clearTrendLines);
+  const clearRectangles = useChartStore((s) => s.clearRectangles);
+  const clearArrows = useChartStore((s) => s.clearArrows);
   const clearTextAnnotations = useChartStore((s) => s.clearTextAnnotations);
   const symbol = useChartStore((s) => s.symbol);
 
@@ -108,6 +122,8 @@ export function LeftSidebar() {
           onClick={() => {
             clearPriceLines(symbol);
             clearTrendLines(symbol);
+            clearRectangles(symbol);
+            clearArrows(symbol);
             clearTextAnnotations(symbol);
           }}
           aria-label="Borrar dibujos"

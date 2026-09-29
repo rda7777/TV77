@@ -93,6 +93,20 @@ export function sma(candles: Candle[], period: number): IndicatorPoint[] {
 }
 
 /**
+ * Simple Moving Average of an indicator series (e.g. the RSI-based MA)
+ */
+export function smaOfPoints(points: IndicatorPoint[], period: number): IndicatorPoint[] {
+  const out: IndicatorPoint[] = [];
+  let sum = 0;
+  for (let i = 0; i < points.length; i++) {
+    sum += points[i].value;
+    if (i >= period) sum -= points[i - period].value;
+    if (i >= period - 1) out.push({ time: points[i].time, value: sum / period });
+  }
+  return out;
+}
+
+/**
  * Exponential Moving Average — seeded with SMA of first `period` candles.
  */
 export function ema(candles: Candle[], period: number): IndicatorPoint[] {

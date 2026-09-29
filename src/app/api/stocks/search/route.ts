@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchCommodities } from "@/lib/stocks/commodities";
+import { getIndexByYahooSymbol, searchIndices } from "@/lib/stocks/indices";
 
 const FALLBACK_SYMBOLS: { symbol: string; name: string; kind: "stock" | "etf" }[] = [
   { symbol: "AAPL", name: "Apple Inc.", kind: "stock" },
@@ -52,6 +53,12 @@ export async function GET(req: NextRequest) {
     name: c.name,
     kind: "commodity" as const,
   }));
+  const indexResults = searchIndices(q).map((i) => ({
+    symbol: i.symbol,
+    name: i.name,
+    kind: "index" as const,
+  }));
+  const localResults = [...indexResults, ...commodityResults];
 
   try {
     const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(q)}`;
@@ -62,18 +69,28 @@ export async function GET(req: NextRequest) {
     if (!res.ok) throw new Error(`yahoo ${res.status}`);
     const data = (await res.json()) as YahooSearchResult;
     const results = data.quotes
-      .filter((r) => r.quoteType === "EQUITY" || r.quoteType === "ETF")
+      .filter(
+        (r) =>
+          (r.quoteType === "EQUITY" || r.quoteType === "ETF" || r.quoteType === "INDEX") &&
+          // Indices we already list under a friendly alias (^IXIC -> NASDAQ) would show twice
+          !(r.quoteType === "INDEX" && getIndexByYahooSymbol(r.symbol)),
+      )
       .map((r) => ({
         symbol: r.symbol,
         name: r.longname ?? r.shortname ?? r.symbol,
-        kind: r.quoteType === "ETF" ? ("etf" as const) : ("stock" as const),
+        kind:
+          r.quoteType === "ETF"
+            ? ("etf" as const)
+            : r.quoteType === "INDEX"
+              ? ("index" as const)
+              : ("stock" as const),
       }));
-    return NextResponse.json([...commodityResults, ...results]);
+    return NextResponse.json([...localResults, ...results]);
   } catch {
     const upper = q.toUpperCase();
     const results = FALLBACK_SYMBOLS.filter(
       (s) => s.symbol.includes(upper) || s.name.toUpperCase().includes(upper),
     );
-    return NextResponse.json([...commodityResults, ...results]);
+    return NextResponse.json([...localResults, ...results]);
   }
 }

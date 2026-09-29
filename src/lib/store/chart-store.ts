@@ -3,10 +3,12 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Timeframe } from "@/lib/binance/types";
+import type { ChartEventKey } from "@/lib/stocks/events";
 
 export type IndicatorKey =
   | "ema20"
   | "ema50"
+  | "ema150"
   | "ema200"
   | "sma"
   | "rsi"
@@ -14,9 +16,12 @@ export type IndicatorKey =
   | "volume"
   | "sr";
 
-export type DrawingTool = "cursor" | "hline" | "trendline" | "measure" | "text" | "eraser";
+export type DrawingTool = "cursor" | "hline" | "trendline" | "rect" | "arrow" | "measure" | "text" | "eraser";
 
 export type Theme = "dark" | "light";
+
+/** Price-axis scaling: "linear" (normal) or "exponential" (logarithmic — equal % moves look equal) */
+export type ScaleMode = "linear" | "exponential";
 
 export interface PriceLine {
   id: string;
@@ -40,6 +45,28 @@ export interface TrendLine {
   extend: TrendLineExtend;
 }
 
+export interface Rectangle {
+  id: string;
+  symbol: string;
+  /** Two opposite corners (any order) */
+  a: TrendPoint;
+  b: TrendPoint;
+  /** Border color */
+  color: string;
+  /** Fill color (drawn translucent) */
+  fillColor: string;
+}
+
+export interface Arrow {
+  id: string;
+  symbol: string;
+  /** Tail */
+  a: TrendPoint;
+  /** Head (the point the arrow points to) */
+  b: TrendPoint;
+  color: string;
+}
+
 export const TRENDLINE_COLORS = [
   "#2962ff",
   "#ef5350",
@@ -49,6 +76,8 @@ export const TRENDLINE_COLORS = [
   "#d1d4dc",
 ];
 export const DEFAULT_TRENDLINE_COLOR = TRENDLINE_COLORS[0];
+/** New trend lines run on to the right edge, like a TradingView ray */
+export const DEFAULT_TRENDLINE_EXTEND: TrendLineExtend = "right";
 
 export interface TextAnnotation {
   id: string;
@@ -61,6 +90,7 @@ export interface TextAnnotation {
 export interface IndicatorConfig {
   ema20: number;
   ema50: number;
+  ema150: number;
   ema200: number;
   sma: number;
   rsi: number;
@@ -74,6 +104,7 @@ export interface IndicatorConfig {
 export const DEFAULT_CONFIG: IndicatorConfig = {
   ema20: 20,
   ema50: 50,
+  ema150: 150,
   ema200: 200,
   sma: 20,
   rsi: 14,
@@ -87,9 +118,10 @@ export const DEFAULT_CONFIG: IndicatorConfig = {
 export const INDICATOR_COLORS: Record<IndicatorKey, string> = {
   ema20: "#ffb74d",
   ema50: "#2962ff",
+  ema150: "#ef5350",
   ema200: "#ab47bc",
   sma: "#00bcd4",
-  rsi: "#ab47bc",
+  rsi: "#7e57c2",
   macd: "#2962ff",
   volume: "#787b86",
   sr: "#26a69a",
@@ -153,6 +185,8 @@ interface ChartState {
   hidden: Record<IndicatorKey, boolean>;
   /** Periods and parameters for each indicator */
   config: IndicatorConfig;
+  /** Corporate event markers shown on stock/ETF charts */
+  events: Record<ChartEventKey, boolean>;
   watchlists: WatchlistDoc[];
   activeWatchlistId: string;
   /** Free-text notes keyed by symbol (only symbols with a non-empty note are present) */
@@ -161,15 +195,20 @@ interface ChartState {
   /** Snap drawing points to the nearest candle's O/H/L/C */
   magnetMode: boolean;
   theme: Theme;
+  scaleMode: ScaleMode;
 
-  // Ephemeral UI state (not persisted)
+  // Drawings (persisted) and ephemeral UI state (tool, selections, dialogs — not persisted)
   tool: DrawingTool;
   priceLines: PriceLine[];
   trendLines: TrendLine[];
   selectedTrendLineId: string | null;
+  rectangles: Rectangle[];
+  selectedRectangleId: string | null;
+  arrows: Arrow[];
+  selectedArrowId: string | null;
   textAnnotations: TextAnnotation[];
   symbolDialogOpen: boolean;
-  /** Section a symbol picked in the add-symbol dialog should land in (null = active list's first section) */
+  /** Section a symbol picked in the symbol dialog should be added to (null = dialog opened from the header search: only change the chart, don't add to the watchlist) */
   addSymbolTargetSection: string | null;
   /** Which indicator's settings dialog is open (null = closed) */
   settingsTarget: IndicatorKey | null;
@@ -183,6 +222,7 @@ interface ChartState {
   removeIndicator: (key: IndicatorKey) => void;
   toggleHidden: (key: IndicatorKey) => void;
   setConfig: (patch: Partial<IndicatorConfig>) => void;
+  toggleEvent: (key: ChartEventKey) => void;
   setActiveWatchlist: (id: string) => void;
   createWatchlist: (name: string) => void;
   renameWatchlist: (id: string, name: string) => void;
@@ -194,12 +234,25 @@ interface ChartState {
   addToWatchlist: (s: string, sectionId?: string) => void;
   removeFromWatchlist: (s: string) => void;
   reorderSymbol: (watchlistId: string, sectionId: string, fromIndex: number, toIndex: number) => void;
+  moveSymbolToSection: (
+    watchlistId: string,
+    fromSectionId: string,
+    toSectionId: string,
+    symbol: string,
+    toIndex?: number,
+  ) => void;
   setSectionSymbols: (watchlistId: string, sectionId: string, symbols: string[]) => void;
   setTool: (t: DrawingTool) => void;
   toggleMagnet: () => void;
   addPriceLine: (price: number, symbol: string) => void;
   clearPriceLines: (symbol?: string) => void;
-  addTrendLine: (a: TrendPoint, b: TrendPoint, symbol: string) => void;
+  /** Adds a trend line (optionally with a non-default style) and returns its id */
+  addTrendLine: (
+    a: TrendPoint,
+    b: TrendPoint,
+    symbol: string,
+    style?: Partial<Pick<TrendLine, "color" | "extend">>,
+  ) => string;
   updateTrendLine: (
     id: string,
     patch: Partial<Pick<TrendLine, "a" | "b" | "color" | "extend">>,
@@ -207,7 +260,22 @@ interface ChartState {
   removeTrendLine: (id: string) => void;
   clearTrendLines: (symbol?: string) => void;
   setSelectedTrendLineId: (id: string | null) => void;
+  addRectangle: (a: TrendPoint, b: TrendPoint, symbol: string) => void;
+  updateRectangle: (
+    id: string,
+    patch: Partial<Pick<Rectangle, "a" | "b" | "color" | "fillColor">>,
+  ) => void;
+  removeRectangle: (id: string) => void;
+  clearRectangles: (symbol?: string) => void;
+  setSelectedRectangleId: (id: string | null) => void;
+  addArrow: (a: TrendPoint, b: TrendPoint, symbol: string) => void;
+  updateArrow: (id: string, patch: Partial<Pick<Arrow, "a" | "b" | "color">>) => void;
+  removeArrow: (id: string) => void;
+  clearArrows: (symbol?: string) => void;
+  setSelectedArrowId: (id: string | null) => void;
   addTextAnnotation: (time: number, price: number, text: string, symbol: string) => void;
+  updateTextAnnotation: (id: string, patch: Partial<Pick<TextAnnotation, "time" | "price" | "text">>) => void;
+  removeTextAnnotation: (id: string) => void;
   clearTextAnnotations: (symbol?: string) => void;
   setSymbolDialogOpen: (v: boolean) => void;
   setAddSymbolTargetSection: (id: string | null) => void;
@@ -216,6 +284,7 @@ interface ChartState {
   requestScreenshot: () => void;
   setTheme: (t: Theme) => void;
   toggleTheme: () => void;
+  setScaleMode: (m: ScaleMode) => void;
 }
 
 export const useChartStore = create<ChartState>()(
@@ -226,7 +295,8 @@ export const useChartStore = create<ChartState>()(
       indicators: {
         ema20: true,
         ema50: true,
-        ema200: false,
+        ema150: true,
+        ema200: true,
         sma: false,
         rsi: true,
         macd: false,
@@ -236,6 +306,7 @@ export const useChartStore = create<ChartState>()(
       hidden: {
         ema20: false,
         ema50: false,
+        ema150: false,
         ema200: false,
         sma: false,
         rsi: false,
@@ -244,15 +315,21 @@ export const useChartStore = create<ChartState>()(
         sr: false,
       },
       config: { ...DEFAULT_CONFIG },
+      events: { dividend: true, split: true, earnings: true, news: true },
       watchlists: [DEFAULT_WATCHLIST_DOC],
       activeWatchlistId: DEFAULT_WATCHLIST_DOC.id,
       notes: {},
       magnetMode: false,
       theme: "dark",
+      scaleMode: "linear",
       tool: "cursor",
       priceLines: [],
       trendLines: [],
       selectedTrendLineId: null,
+      rectangles: [],
+      selectedRectangleId: null,
+      arrows: [],
+      selectedArrowId: null,
       textAnnotations: [],
       symbolDialogOpen: false,
       addSymbolTargetSection: null,
@@ -269,6 +346,7 @@ export const useChartStore = create<ChartState>()(
             ? { ...s.hidden, [key]: false }
             : s.hidden,
         })),
+      toggleEvent: (key) => set((s) => ({ events: { ...s.events, [key]: !s.events[key] } })),
       removeIndicator: (key) =>
         set((s) => ({
           indicators: { ...s.indicators, [key]: false },
@@ -414,6 +492,31 @@ export const useChartStore = create<ChartState>()(
             };
           }),
         })),
+      moveSymbolToSection: (watchlistId, fromSectionId, toSectionId, symbol, toIndex) =>
+        set((state) => ({
+          watchlists: state.watchlists.map((w) => {
+            if (w.id !== watchlistId) return w;
+            const fromSection = w.sections.find((sec) => sec.id === fromSectionId);
+            if (!fromSection || !fromSection.symbols.includes(symbol)) return w;
+            return {
+              ...w,
+              sections: w.sections.map((sec) => {
+                if (sec.id === fromSectionId && sec.id === toSectionId) return sec;
+                if (sec.id === fromSectionId) {
+                  return { ...sec, symbols: sec.symbols.filter((x) => x !== symbol) };
+                }
+                if (sec.id === toSectionId) {
+                  if (sec.symbols.includes(symbol)) return sec;
+                  const symbols = [...sec.symbols];
+                  const insertAt = toIndex ?? symbols.length;
+                  symbols.splice(Math.max(0, Math.min(insertAt, symbols.length)), 0, symbol);
+                  return { ...sec, symbols };
+                }
+                return sec;
+              }),
+            };
+          }),
+        })),
       setSectionSymbols: (watchlistId, sectionId, symbols) =>
         set((state) => ({
           watchlists: state.watchlists.map((w) => {
@@ -448,13 +551,16 @@ export const useChartStore = create<ChartState>()(
             ? state.priceLines.filter((p) => p.symbol !== symbol)
             : [],
         })),
-      addTrendLine: (a, b, symbol) =>
+      addTrendLine: (a, b, symbol, style) => {
+        const id = genId();
         set((state) => ({
           trendLines: [
             ...state.trendLines,
-            { id: genId(), symbol, a, b, color: DEFAULT_TRENDLINE_COLOR, extend: "none" },
+            { id, symbol, a, b, color: DEFAULT_TRENDLINE_COLOR, extend: DEFAULT_TRENDLINE_EXTEND, ...style },
           ],
-        })),
+        }));
+        return id;
+      },
       updateTrendLine: (id, patch) =>
         set((state) => ({
           trendLines: state.trendLines.map((t) => (t.id === id ? { ...t, ...patch } : t)),
@@ -471,18 +577,90 @@ export const useChartStore = create<ChartState>()(
             : [],
           selectedTrendLineId: null,
         })),
-      setSelectedTrendLineId: (selectedTrendLineId) => set({ selectedTrendLineId }),
+      // Only one drawing is selected at a time, so selecting one clears the other kind
+      setSelectedTrendLineId: (selectedTrendLineId) =>
+        set((state) => ({
+          selectedTrendLineId,
+          selectedRectangleId: selectedTrendLineId ? null : state.selectedRectangleId,
+          selectedArrowId: selectedTrendLineId ? null : state.selectedArrowId,
+        })),
+      addRectangle: (a, b, symbol) =>
+        set((state) => ({
+          rectangles: [
+            ...state.rectangles,
+            {
+              id: genId(),
+              symbol,
+              a,
+              b,
+              color: DEFAULT_TRENDLINE_COLOR,
+              fillColor: DEFAULT_TRENDLINE_COLOR,
+            },
+          ],
+        })),
+      updateRectangle: (id, patch) =>
+        set((state) => ({
+          rectangles: state.rectangles.map((r) => (r.id === id ? { ...r, ...patch } : r)),
+        })),
+      removeRectangle: (id) =>
+        set((state) => ({
+          rectangles: state.rectangles.filter((r) => r.id !== id),
+          selectedRectangleId: state.selectedRectangleId === id ? null : state.selectedRectangleId,
+        })),
+      clearRectangles: (symbol) =>
+        set((state) => ({
+          rectangles: symbol ? state.rectangles.filter((r) => r.symbol !== symbol) : [],
+          selectedRectangleId: null,
+        })),
+      setSelectedRectangleId: (selectedRectangleId) =>
+        set((state) => ({
+          selectedRectangleId,
+          selectedTrendLineId: selectedRectangleId ? null : state.selectedTrendLineId,
+          selectedArrowId: selectedRectangleId ? null : state.selectedArrowId,
+        })),
+      addArrow: (a, b, symbol) =>
+        set((state) => ({
+          arrows: [...state.arrows, { id: genId(), symbol, a, b, color: DEFAULT_TRENDLINE_COLOR }],
+        })),
+      updateArrow: (id, patch) =>
+        set((state) => ({
+          arrows: state.arrows.map((ar) => (ar.id === id ? { ...ar, ...patch } : ar)),
+        })),
+      removeArrow: (id) =>
+        set((state) => ({
+          arrows: state.arrows.filter((ar) => ar.id !== id),
+          selectedArrowId: state.selectedArrowId === id ? null : state.selectedArrowId,
+        })),
+      clearArrows: (symbol) =>
+        set((state) => ({
+          arrows: symbol ? state.arrows.filter((ar) => ar.symbol !== symbol) : [],
+          selectedArrowId: null,
+        })),
+      setSelectedArrowId: (selectedArrowId) =>
+        set((state) => ({
+          selectedArrowId,
+          selectedTrendLineId: selectedArrowId ? null : state.selectedTrendLineId,
+          selectedRectangleId: selectedArrowId ? null : state.selectedRectangleId,
+        })),
       addTextAnnotation: (time, price, text, symbol) =>
         set((state) => ({
           textAnnotations: [...state.textAnnotations, { id: genId(), symbol, time, price, text }],
         })),
+      updateTextAnnotation: (id, patch) =>
+        set((state) => ({
+          textAnnotations: state.textAnnotations.map((t) => (t.id === id ? { ...t, ...patch } : t)),
+        })),
+      removeTextAnnotation: (id) =>
+        set((state) => ({ textAnnotations: state.textAnnotations.filter((t) => t.id !== id) })),
       clearTextAnnotations: (symbol) =>
         set((state) => ({
           textAnnotations: symbol
             ? state.textAnnotations.filter((t) => t.symbol !== symbol)
             : [],
         })),
-      setSymbolDialogOpen: (symbolDialogOpen) => set({ symbolDialogOpen }),
+      // Closing resets the target so the next open from the header search doesn't add to the watchlist
+      setSymbolDialogOpen: (symbolDialogOpen) =>
+        set(symbolDialogOpen ? { symbolDialogOpen } : { symbolDialogOpen, addSymbolTargetSection: null }),
       setAddSymbolTargetSection: (addSymbolTargetSection) => set({ addSymbolTargetSection }),
       setSettingsTarget: (settingsTarget) => set({ settingsTarget }),
       setNote: (symbol, text) =>
@@ -498,6 +676,7 @@ export const useChartStore = create<ChartState>()(
       setTheme: (theme) => set({ theme }),
       toggleTheme: () =>
         set((state) => ({ theme: state.theme === "dark" ? "light" : "dark" })),
+      setScaleMode: (scaleMode) => set({ scaleMode }),
     }),
     {
       name: "tv-gratis-chart-state",
@@ -534,6 +713,7 @@ export const useChartStore = create<ChartState>()(
           indicators: { ...currentState.indicators, ...persisted?.indicators },
           hidden: { ...currentState.hidden, ...persisted?.hidden },
           config: { ...currentState.config, ...persisted?.config },
+          events: { ...currentState.events, ...persisted?.events },
         };
       },
       partialize: (s) => ({
@@ -542,11 +722,18 @@ export const useChartStore = create<ChartState>()(
         indicators: s.indicators,
         hidden: s.hidden,
         config: s.config,
+        events: s.events,
         watchlists: s.watchlists,
         activeWatchlistId: s.activeWatchlistId,
         notes: s.notes,
         magnetMode: s.magnetMode,
         theme: s.theme,
+        scaleMode: s.scaleMode,
+        priceLines: s.priceLines,
+        trendLines: s.trendLines,
+        rectangles: s.rectangles,
+        arrows: s.arrows,
+        textAnnotations: s.textAnnotations,
       }),
     },
   ),

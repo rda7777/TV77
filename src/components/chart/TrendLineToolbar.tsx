@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, ArrowRight, Trash2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, Copy, Trash2 } from "lucide-react";
 import { TRENDLINE_COLORS } from "@/lib/store/chart-store";
 import { cn } from "@/lib/utils";
 
@@ -13,6 +13,7 @@ interface Props {
   onColorChange: (color: string) => void;
   onToggleExtendLeft: () => void;
   onToggleExtendRight: () => void;
+  onClone: () => void;
   onDelete: () => void;
 }
 
@@ -25,6 +26,7 @@ export function TrendLineToolbar({
   onColorChange,
   onToggleExtendLeft,
   onToggleExtendRight,
+  onClone,
   onDelete,
 }: Props) {
   return (
@@ -76,6 +78,15 @@ export function TrendLineToolbar({
 
       <div className="mx-0.5 h-4 w-px bg-tv-border" />
 
+      <button
+        type="button"
+        aria-label="Clonar línea"
+        title="Clonar"
+        onClick={onClone}
+        className="flex h-6 w-6 items-center justify-center rounded text-tv-text-muted transition-colors hover:bg-tv-panel-hover hover:text-tv-text"
+      >
+        <Copy className="h-3.5 w-3.5" />
+      </button>
       <button
         type="button"
         aria-label="Eliminar línea"

@@ -18,7 +18,8 @@ import {
 const TITLES: Record<IndicatorKey, string> = {
   ema20: "EMA — Slot 1",
   ema50: "EMA — Slot 2",
-  ema200: "EMA — Slot 3",
+  ema150: "EMA — Slot 3",
+  ema200: "EMA — Slot 4",
   sma: "SMA",
   rsi: "RSI",
   macd: "MACD",
@@ -78,6 +79,7 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
   const [draft, setDraft] = useState({
     ema20: config.ema20,
     ema50: config.ema50,
+    ema150: config.ema150,
     ema200: config.ema200,
     sma: config.sma,
     rsi: config.rsi,
@@ -92,6 +94,7 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
     setDraft({
       ema20: config.ema20,
       ema50: config.ema50,
+      ema150: config.ema150,
       ema200: config.ema200,
       sma: config.sma,
       rsi: config.rsi,
@@ -106,6 +109,7 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
   function save() {
     if (target === "ema20") onSave({ ema20: clamp(draft.ema20, 2, 500) });
     else if (target === "ema50") onSave({ ema50: clamp(draft.ema50, 2, 500) });
+    else if (target === "ema150") onSave({ ema150: clamp(draft.ema150, 2, 500) });
     else if (target === "ema200") onSave({ ema200: clamp(draft.ema200, 2, 500) });
     else if (target === "sma") onSave({ sma: clamp(draft.sma, 2, 500) });
     else if (target === "rsi") onSave({ rsi: clamp(draft.rsi, 2, 100) });
@@ -127,6 +131,7 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
     <div className="flex flex-col gap-3">
       {(target === "ema20" ||
         target === "ema50" ||
+        target === "ema150" ||
         target === "ema200" ||
         target === "sma") && (
         <Field

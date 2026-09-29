@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 
 interface Props {
   name: string;
-  value?: string;
+  value?: React.ReactNode;
   color: string;
   hidden: boolean;
   onToggleHide: () => void;

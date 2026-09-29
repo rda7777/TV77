@@ -1,3 +1,5 @@
+import { getIndexInfo } from "./indices";
+
 export interface CommodityInfo {
   symbol: string;
   yahooSymbol: string;
@@ -31,9 +33,16 @@ export function isCommoditySymbol(symbol: string): boolean {
   return BY_SYMBOL.has(symbol.toUpperCase());
 }
 
-/** Translates a friendly commodity ticker (USOIL) to its Yahoo Finance symbol (CL=F). */
+/**
+ * Translates a friendly commodity (USOIL) or index (NASDAQ) ticker to its Yahoo Finance
+ * symbol (CL=F, ^IXIC). Anything else is passed through unchanged.
+ */
 export function toYahooSymbol(symbol: string): string {
-  return BY_SYMBOL.get(symbol.toUpperCase())?.yahooSymbol ?? symbol;
+  return (
+    BY_SYMBOL.get(symbol.toUpperCase())?.yahooSymbol ??
+    getIndexInfo(symbol)?.yahooSymbol ??
+    symbol
+  );
 }
 
 export function searchCommodities(query: string): CommodityInfo[] {
