@@ -1,6 +1,6 @@
 "use client";
 
-import { Bell, Camera, Code2, Moon, Sun, Zap } from "lucide-react";
+import { Bell, Camera, Code2, List, Moon, Sun, Zap } from "lucide-react";
 import { SymbolSelector } from "@/components/chart/SymbolSelector";
 import { TimeframeSelector } from "@/components/chart/TimeframeSelector";
 import { IndicatorMenu } from "@/components/chart/IndicatorMenu";
@@ -10,7 +10,11 @@ import { useChartStore } from "@/lib/store/chart-store";
 import { useAlertsStore } from "@/lib/store/alerts-store";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-export function Header() {
+interface HeaderProps {
+  onToggleWatchlist: () => void;
+}
+
+export function Header({ onToggleWatchlist }: HeaderProps) {
   const requestScreenshot = useChartStore((s) => s.requestScreenshot);
   const theme = useChartStore((s) => s.theme);
   const toggleTheme = useChartStore((s) => s.toggleTheme);
@@ -18,26 +22,38 @@ export function Header() {
   const pendingAlerts = useAlertsStore((s) => s.alerts.filter((a) => !a.triggeredAt).length);
 
   return (
-    <header className="flex h-12 items-center justify-between border-b border-tv-border bg-tv-panel px-3">
-      <div className="flex items-center gap-1">
-        <div className="flex items-center gap-2 pr-2">
+    <header className="flex h-12 items-center justify-between gap-2 border-b border-tv-border bg-tv-panel px-3">
+      <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <div className="flex shrink-0 items-center gap-2 pr-2">
           <div className="flex h-7 w-7 items-center justify-center rounded bg-tv-blue/20">
             <Zap className="h-4 w-4 text-tv-blue" />
           </div>
-          <span className="text-sm font-semibold text-tv-text">
+          <span className="hidden text-sm font-semibold text-tv-text sm:inline">
             TradingView <span className="text-tv-text-muted">Gratis</span>
           </span>
         </div>
-        <Separator orientation="vertical" className="h-6 bg-tv-border" />
+        <Separator orientation="vertical" className="h-6 shrink-0 bg-tv-border" />
         <SymbolSelector />
-        <Separator orientation="vertical" className="h-6 bg-tv-border" />
+        <Separator orientation="vertical" className="h-6 shrink-0 bg-tv-border" />
         <TimeframeSelector />
-        <Separator orientation="vertical" className="mx-1 h-6 bg-tv-border" />
+        <Separator orientation="vertical" className="mx-1 h-6 shrink-0 bg-tv-border" />
         <IndicatorMenu />
         <ScaleModeMenu />
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex shrink-0 items-center gap-2">
+        <Tooltip>
+          <TooltipTrigger
+            onClick={onToggleWatchlist}
+            aria-label="Watchlist"
+            className="flex h-8 w-8 items-center justify-center rounded text-tv-text-muted transition-colors hover:bg-tv-panel-hover hover:text-tv-text md:hidden"
+          >
+            <List className="h-4 w-4" />
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="text-xs">
+            Watchlist
+          </TooltipContent>
+        </Tooltip>
         <Tooltip>
           <TooltipTrigger
             onClick={() => setAlertsOpen(true)}
@@ -87,7 +103,7 @@ export function Header() {
           href="https://github.com"
           target="_blank"
           rel="noopener noreferrer"
-          className="flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs text-tv-text-muted hover:bg-tv-panel-hover hover:text-tv-text"
+          className="hidden items-center gap-1.5 rounded px-2.5 py-1.5 text-xs text-tv-text-muted hover:bg-tv-panel-hover hover:text-tv-text lg:flex"
         >
           <Code2 className="h-3.5 w-3.5" />
           <span>Source</span>
