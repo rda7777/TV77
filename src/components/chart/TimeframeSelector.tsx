@@ -16,7 +16,7 @@ export function TimeframeSelector() {
           key={t}
           onClick={() => setTf(t)}
           className={cn(
-            "rounded px-2 py-1 text-xs font-medium uppercase transition-colors",
+            "rounded px-2.5 py-1 text-sm font-medium uppercase transition-colors",
             tf === t
               ? "bg-tv-panel-hover text-tv-text"
               : "text-tv-text-muted hover:bg-tv-panel-hover hover:text-tv-text",

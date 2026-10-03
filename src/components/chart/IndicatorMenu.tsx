@@ -72,8 +72,8 @@ export function IndicatorMenu() {
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger className="flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs text-tv-text hover:bg-tv-panel-hover">
-        <Activity className="h-3.5 w-3.5" />
+      <DropdownMenuTrigger className="flex items-center gap-1.5 rounded px-2.5 py-1.5 text-sm text-tv-text hover:bg-tv-panel-hover">
+        <Activity className="h-4 w-4" />
         <span>Indicadores</span>
         {activeCount > 0 && (
           <span className="ml-1 rounded bg-tv-blue/20 px-1.5 py-0.5 text-[10px] font-semibold text-tv-blue">

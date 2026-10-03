@@ -22,21 +22,21 @@ export function Header({ onToggleWatchlist }: HeaderProps) {
   const pendingAlerts = useAlertsStore((s) => s.alerts.filter((a) => !a.triggeredAt).length);
 
   return (
-    <header className="flex h-12 items-center justify-between gap-2 border-b border-tv-border bg-tv-panel px-3">
+    <header className="flex h-14 items-center justify-between gap-2 border-b border-tv-border bg-tv-panel px-3">
       <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <div className="flex shrink-0 items-center gap-2 pr-2">
-          <div className="flex h-7 w-7 items-center justify-center rounded bg-tv-blue/20">
-            <Zap className="h-4 w-4 text-tv-blue" />
+          <div className="flex h-8 w-8 items-center justify-center rounded bg-tv-blue/20">
+            <Zap className="h-5 w-5 text-tv-blue" />
           </div>
-          <span className="hidden text-sm font-semibold text-tv-text sm:inline">
+          <span className="hidden text-base font-semibold text-tv-text sm:inline">
             TradingView <span className="text-tv-text-muted">Gratis</span>
           </span>
         </div>
-        <Separator orientation="vertical" className="h-6 shrink-0 bg-tv-border" />
+        <Separator orientation="vertical" className="h-7 shrink-0 bg-tv-border" />
         <SymbolSelector />
-        <Separator orientation="vertical" className="h-6 shrink-0 bg-tv-border" />
+        <Separator orientation="vertical" className="h-7 shrink-0 bg-tv-border" />
         <TimeframeSelector />
-        <Separator orientation="vertical" className="mx-1 h-6 shrink-0 bg-tv-border" />
+        <Separator orientation="vertical" className="mx-1 h-7 shrink-0 bg-tv-border" />
         <IndicatorMenu />
         <ScaleModeMenu />
       </div>
@@ -46,9 +46,9 @@ export function Header({ onToggleWatchlist }: HeaderProps) {
           <TooltipTrigger
             onClick={onToggleWatchlist}
             aria-label="Watchlist"
-            className="flex h-8 w-8 items-center justify-center rounded text-tv-text-muted transition-colors hover:bg-tv-panel-hover hover:text-tv-text md:hidden"
+            className="flex h-9 w-9 items-center justify-center rounded text-tv-text-muted transition-colors hover:bg-tv-panel-hover hover:text-tv-text md:hidden"
           >
-            <List className="h-4 w-4" />
+            <List className="h-5 w-5" />
           </TooltipTrigger>
           <TooltipContent side="bottom" className="text-xs">
             Watchlist
@@ -58,9 +58,9 @@ export function Header({ onToggleWatchlist }: HeaderProps) {
           <TooltipTrigger
             onClick={() => setAlertsOpen(true)}
             aria-label="Alertas de precio"
-            className="relative flex h-8 w-8 items-center justify-center rounded text-tv-text-muted transition-colors hover:bg-tv-panel-hover hover:text-tv-text"
+            className="relative flex h-9 w-9 items-center justify-center rounded text-tv-text-muted transition-colors hover:bg-tv-panel-hover hover:text-tv-text"
           >
-            <Bell className="h-4 w-4" />
+            <Bell className="h-5 w-5" />
             {pendingAlerts > 0 && (
               <span className="absolute top-1 right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-tv-blue text-[9px] font-semibold text-white">
                 {pendingAlerts}
@@ -75,12 +75,12 @@ export function Header({ onToggleWatchlist }: HeaderProps) {
           <TooltipTrigger
             onClick={toggleTheme}
             aria-label={theme === "dark" ? "Cambiar a tema claro" : "Cambiar a tema oscuro"}
-            className="flex h-8 w-8 items-center justify-center rounded text-tv-text-muted transition-colors hover:bg-tv-panel-hover hover:text-tv-text"
+            className="flex h-9 w-9 items-center justify-center rounded text-tv-text-muted transition-colors hover:bg-tv-panel-hover hover:text-tv-text"
           >
             {theme === "dark" ? (
-              <Sun className="h-4 w-4" />
+              <Sun className="h-5 w-5" />
             ) : (
-              <Moon className="h-4 w-4" />
+              <Moon className="h-5 w-5" />
             )}
           </TooltipTrigger>
           <TooltipContent side="bottom" className="text-xs">
@@ -91,9 +91,9 @@ export function Header({ onToggleWatchlist }: HeaderProps) {
           <TooltipTrigger
             onClick={requestScreenshot}
             aria-label="Capturar imagen"
-            className="flex h-8 w-8 items-center justify-center rounded text-tv-text-muted transition-colors hover:bg-tv-panel-hover hover:text-tv-text"
+            className="flex h-9 w-9 items-center justify-center rounded text-tv-text-muted transition-colors hover:bg-tv-panel-hover hover:text-tv-text"
           >
-            <Camera className="h-4 w-4" />
+            <Camera className="h-5 w-5" />
           </TooltipTrigger>
           <TooltipContent side="bottom" className="text-xs">
             Capturar imagen
@@ -103,9 +103,9 @@ export function Header({ onToggleWatchlist }: HeaderProps) {
           href="https://github.com"
           target="_blank"
           rel="noopener noreferrer"
-          className="hidden items-center gap-1.5 rounded px-2.5 py-1.5 text-xs text-tv-text-muted hover:bg-tv-panel-hover hover:text-tv-text lg:flex"
+          className="hidden items-center gap-1.5 rounded px-2.5 py-1.5 text-sm text-tv-text-muted hover:bg-tv-panel-hover hover:text-tv-text lg:flex"
         >
-          <Code2 className="h-3.5 w-3.5" />
+          <Code2 className="h-4 w-4" />
           <span>Source</span>
         </a>
       </div>

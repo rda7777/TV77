@@ -250,9 +250,9 @@ export function Watchlist() {
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-tv-border px-3 py-2">
         <DropdownMenu>
-          <DropdownMenuTrigger className="flex items-center gap-1 rounded px-1 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-tv-text-muted hover:bg-tv-panel-hover hover:text-tv-text">
-            <span className="max-w-[140px] truncate">{activeList.name}</span>
-            <ChevronDown className="h-3 w-3" />
+          <DropdownMenuTrigger className="flex items-center gap-1 rounded px-1 py-0.5 text-xs font-semibold uppercase tracking-wider text-tv-text-muted hover:bg-tv-panel-hover hover:text-tv-text">
+            <span className="max-w-[180px] truncate">{activeList.name}</span>
+            <ChevronDown className="h-3.5 w-3.5" />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-56 bg-tv-panel">
             {watchlists.map((w) => (
@@ -285,14 +285,14 @@ export function Watchlist() {
             title="Agregar símbolo"
             aria-label="Agregar al watchlist"
           >
-            <Plus className="h-3.5 w-3.5" />
+            <Plus className="h-4 w-4" />
           </button>
           <DropdownMenu>
             <DropdownMenuTrigger
               className="rounded p-1 text-tv-text-muted hover:bg-tv-panel-hover hover:text-tv-text"
               aria-label="Opciones de lista"
             >
-              <MoreVertical className="h-3.5 w-3.5" />
+              <MoreVertical className="h-4 w-4" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48 bg-tv-panel">
               <DropdownMenuItem
@@ -358,8 +358,8 @@ export function Watchlist() {
           />
         </div>
       </div>
-      <div className="grid grid-cols-[auto_1fr_auto_auto] gap-2 border-b border-tv-border px-3 py-1.5 text-[10px] uppercase tracking-wider text-tv-text-dim">
-        <span className="w-3" />
+      <div className="grid grid-cols-[0.875rem_minmax(0,7rem)_4.75rem_3.5rem] justify-start gap-1.5 border-b border-tv-border px-3 py-1.5 text-[11px] uppercase tracking-wider text-tv-text-dim">
+        <span />
         <span>Símbolo</span>
         <span className="text-right">Precio</span>
         <span className="text-right">24h</span>
@@ -385,7 +385,7 @@ export function Watchlist() {
             >
               <div
                 className={cn(
-                  "group/section flex items-center justify-between border-b border-tv-border bg-tv-panel px-3 py-1 text-[10px]",
+                  "group/section flex items-center justify-between border-b border-tv-border bg-tv-panel px-3 py-1.5 text-[11px]",
                   dragOverSection === section.id && "bg-tv-blue/10",
                 )}
               >
@@ -394,9 +394,9 @@ export function Watchlist() {
                   className="flex items-center gap-1 text-tv-text-muted hover:text-tv-text"
                 >
                   {section.collapsed ? (
-                    <ChevronRight className="h-3 w-3" />
+                    <ChevronRight className="h-3.5 w-3.5" />
                   ) : (
-                    <ChevronDown className="h-3 w-3" />
+                    <ChevronDown className="h-3.5 w-3.5" />
                   )}
                   <span className="font-semibold uppercase tracking-wider">{section.name}</span>
                   <span className="text-tv-text-dim">({section.symbols.length})</span>
@@ -411,14 +411,14 @@ export function Watchlist() {
                     aria-label={`Agregar símbolo a ${section.name}`}
                     title="Agregar símbolo aquí"
                   >
-                    <Plus className="h-3 w-3" />
+                    <Plus className="h-3.5 w-3.5" />
                   </button>
                   <DropdownMenu>
                     <DropdownMenuTrigger
                       className="invisible rounded p-0.5 text-tv-text-muted hover:bg-tv-panel-hover hover:text-tv-text group-hover/section:visible"
                       aria-label={`Opciones de sección ${section.name}`}
                     >
-                      <MoreVertical className="h-3 w-3" />
+                      <MoreVertical className="h-3.5 w-3.5" />
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end" className="w-44 bg-tv-panel">
                       <DropdownMenuSub>
@@ -504,6 +504,23 @@ export function Watchlist() {
                     dragOverIndex?.sectionId === section.id &&
                     dragOverIndex.index === index &&
                     !isDragging;
+                  const noteButton = getMarketType(s) === "stock" && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setNoteTarget(s);
+                        setNoteValue(notes[s] ?? "");
+                      }}
+                      className={cn(
+                        "shrink-0 rounded p-0.5 hover:bg-tv-bg",
+                        notes[s] ? "text-tv-yellow" : "text-tv-text-muted hover:text-tv-text",
+                      )}
+                      aria-label={notes[s] ? `Editar nota de ${s}` : `Agregar nota a ${s}`}
+                      title={notes[s] || "Agregar nota"}
+                    >
+                      <StickyNote className="h-3.5 w-3.5" />
+                    </button>
+                  );
                   return (
                     <div
                       key={s}
@@ -532,29 +549,32 @@ export function Watchlist() {
                         setDragOverSection(null);
                       }}
                       className={cn(
-                        "group grid cursor-pointer grid-cols-[auto_1fr_auto_auto] items-center gap-2 px-3 py-1.5 text-xs transition-colors",
+                        "group relative grid cursor-pointer grid-cols-[0.875rem_minmax(0,7rem)_4.75rem_3.5rem] justify-start items-center gap-1.5 px-3 py-2 text-sm transition-colors",
                         "hover:bg-tv-panel-hover",
                         isActive && "bg-tv-panel-hover",
                         isDragging && "opacity-40",
                         isDragOver && "border-t-2 border-tv-blue",
                       )}
                     >
-                      <GripVertical className="h-3 w-3 shrink-0 cursor-grab text-tv-text-dim opacity-0 group-hover:opacity-100" />
-                      <div className="flex items-center gap-2">
+                      <GripVertical className="h-3.5 w-3.5 shrink-0 cursor-grab text-tv-text-dim opacity-0 group-hover:opacity-100" />
+                      <div className="flex min-w-0 items-center gap-1.5">
                         <img
                           src={getLogoUrl(s)}
                           alt=""
-                          className="h-4 w-4 shrink-0 rounded-full bg-tv-panel-hover object-cover"
+                          className="h-5 w-5 shrink-0 rounded-full bg-tv-panel-hover object-cover"
                           onError={(e) => {
                             e.currentTarget.style.display = "none";
                           }}
                         />
-                        <span className="font-medium text-tv-text">
+                        <span className="truncate font-medium text-tv-text">
                           {getMarketType(s) === "crypto" ? s.replace("USDT", "") : s}
                         </span>
                         {getMarketType(s) === "crypto" && (
-                          <span className="text-[10px] text-tv-text-dim">USDT</span>
+                          <span className="min-w-0 flex-1 basis-0 overflow-hidden text-[11px] whitespace-nowrap text-tv-text-dim">
+                            USDT
+                          </span>
                         )}
+                        {notes[s] && noteButton}
                       </div>
                       <span
                         className={cn(
@@ -566,49 +586,30 @@ export function Watchlist() {
                       >
                         {row ? formatPrice(row.price) : "—"}
                       </span>
-                      <div className="flex items-center justify-end gap-1">
-                        <span
-                          className={cn(
-                            "tabular-nums",
-                            row
-                              ? row.pct >= 0
-                                ? "text-tv-green"
-                                : "text-tv-red"
-                              : "text-tv-text-muted",
-                          )}
-                        >
-                          {row ? formatPct(row.pct) : "—"}
-                        </span>
-                        {getMarketType(s) === "stock" && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setNoteTarget(s);
-                              setNoteValue(notes[s] ?? "");
-                            }}
-                            className={cn(
-                              "rounded p-0.5 hover:bg-tv-bg",
-                              notes[s]
-                                ? "text-tv-yellow"
-                                : "invisible text-tv-text-muted hover:text-tv-text group-hover:visible",
-                            )}
-                            aria-label={
-                              notes[s] ? `Editar nota de ${s}` : `Agregar nota a ${s}`
-                            }
-                            title={notes[s] || "Agregar nota"}
-                          >
-                            <StickyNote className="h-3 w-3" />
-                          </button>
+                      <span
+                        className={cn(
+                          "text-right tabular-nums",
+                          row
+                            ? row.pct >= 0
+                              ? "text-tv-green"
+                              : "text-tv-red"
+                            : "text-tv-text-muted",
                         )}
+                      >
+                        {row ? formatPct(row.pct) : "—"}
+                      </span>
+                      {/* Hover actions float over the right edge so they never take width from the columns */}
+                      <div className="invisible absolute inset-y-0 right-0 flex items-center gap-0.5 bg-tv-panel-hover pr-2 pl-1.5 group-hover:visible">
+                        {!notes[s] && noteButton}
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
                             removeFromWatchlist(s);
                           }}
-                          className="invisible rounded p-0.5 text-tv-text-muted hover:bg-tv-bg hover:text-tv-red group-hover:visible"
+                          className="rounded p-0.5 text-tv-text-muted hover:bg-tv-bg hover:text-tv-red"
                           aria-label={`Quitar ${s} del watchlist`}
                         >
-                          <X className="h-3 w-3" />
+                          <X className="h-3.5 w-3.5" />
                         </button>
                       </div>
                     </div>

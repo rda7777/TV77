@@ -21,7 +21,7 @@ export default function HomePage() {
       <Header onToggleWatchlist={() => setWatchlistOpen((v) => !v)} />
       <div className="relative flex min-h-0 flex-1">
         <LeftSidebar />
-        <main className="relative flex min-h-0 flex-1 flex-col">
+        <main className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="min-h-0 flex-1">
             <PriceChart symbol={symbol} timeframe={timeframe} />
           </div>

@@ -23,8 +23,8 @@ export function ScaleModeMenu() {
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger className="flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs text-tv-text hover:bg-tv-panel-hover">
-        <ChartSpline className="h-3.5 w-3.5" />
+      <DropdownMenuTrigger className="flex items-center gap-1.5 rounded px-2.5 py-1.5 text-sm text-tv-text hover:bg-tv-panel-hover">
+        <ChartSpline className="h-4 w-4" />
         <span>{current.label}</span>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-52 bg-tv-panel">

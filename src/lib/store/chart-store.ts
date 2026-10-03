@@ -196,6 +196,8 @@ interface ChartState {
   magnetMode: boolean;
   theme: Theme;
   scaleMode: ScaleMode;
+  /** Desktop watchlist panel width in px (user-resizable) */
+  watchlistWidth: number;
 
   // Drawings (persisted) and ephemeral UI state (tool, selections, dialogs — not persisted)
   tool: DrawingTool;
@@ -285,7 +287,10 @@ interface ChartState {
   setTheme: (t: Theme) => void;
   toggleTheme: () => void;
   setScaleMode: (m: ScaleMode) => void;
+  setWatchlistWidth: (w: number) => void;
 }
+
+export const DEFAULT_WATCHLIST_WIDTH = 320;
 
 export const useChartStore = create<ChartState>()(
   persist(
@@ -322,6 +327,7 @@ export const useChartStore = create<ChartState>()(
       magnetMode: false,
       theme: "dark",
       scaleMode: "linear",
+      watchlistWidth: DEFAULT_WATCHLIST_WIDTH,
       tool: "cursor",
       priceLines: [],
       trendLines: [],
@@ -677,6 +683,7 @@ export const useChartStore = create<ChartState>()(
       toggleTheme: () =>
         set((state) => ({ theme: state.theme === "dark" ? "light" : "dark" })),
       setScaleMode: (scaleMode) => set({ scaleMode }),
+      setWatchlistWidth: (watchlistWidth) => set({ watchlistWidth }),
     }),
     {
       name: "tv-gratis-chart-state",
@@ -729,6 +736,7 @@ export const useChartStore = create<ChartState>()(
         magnetMode: s.magnetMode,
         theme: s.theme,
         scaleMode: s.scaleMode,
+        watchlistWidth: s.watchlistWidth,
         priceLines: s.priceLines,
         trendLines: s.trendLines,
         rectangles: s.rectangles,

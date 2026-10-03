@@ -67,7 +67,7 @@ export function LeftSidebar() {
   const symbol = useChartStore((s) => s.symbol);
 
   return (
-    <aside className="flex w-11 flex-col items-center gap-0.5 border-r border-tv-border bg-tv-panel py-1.5">
+    <aside className="flex w-14 flex-col items-center gap-1 border-r border-tv-border bg-tv-panel py-1.5">
       {TOOLS.map((t) => {
         const Icon = t.icon;
         const active = tool === t.key;
@@ -77,13 +77,13 @@ export function LeftSidebar() {
               onClick={() => setTool(t.key)}
               aria-label={t.label}
               className={cn(
-                "flex h-8 w-8 items-center justify-center rounded transition-colors hover:bg-tv-panel-hover",
+                "flex h-11 w-11 items-center justify-center rounded transition-colors hover:bg-tv-panel-hover",
                 active
                   ? "bg-tv-blue/15 text-tv-blue"
                   : "text-tv-text-muted hover:text-tv-text",
               )}
             >
-              <Icon className="h-4 w-4" />
+              <Icon className="h-6 w-6" />
             </TooltipTrigger>
             <TooltipContent side="right" className="text-xs">
               <div className="font-medium">{t.label}</div>
@@ -101,13 +101,13 @@ export function LeftSidebar() {
           aria-label="Imán"
           aria-pressed={magnetMode}
           className={cn(
-            "flex h-8 w-8 items-center justify-center rounded transition-colors hover:bg-tv-panel-hover",
+            "flex h-11 w-11 items-center justify-center rounded transition-colors hover:bg-tv-panel-hover",
             magnetMode
               ? "bg-tv-blue/15 text-tv-blue"
               : "text-tv-text-muted hover:text-tv-text",
           )}
         >
-          <Magnet className="h-4 w-4" />
+          <Magnet className="h-6 w-6" />
         </TooltipTrigger>
         <TooltipContent side="right" className="text-xs">
           <div className="font-medium">Imán</div>
@@ -127,9 +127,9 @@ export function LeftSidebar() {
             clearTextAnnotations(symbol);
           }}
           aria-label="Borrar dibujos"
-          className="flex h-8 w-8 items-center justify-center rounded text-tv-text-muted hover:bg-tv-panel-hover hover:text-tv-red"
+          className="flex h-11 w-11 items-center justify-center rounded text-tv-text-muted hover:bg-tv-panel-hover hover:text-tv-red"
         >
-          <Trash2 className="h-4 w-4" />
+          <Trash2 className="h-6 w-6" />
         </TooltipTrigger>
         <TooltipContent side="right" className="text-xs">
           <div className="font-medium">Borrar dibujos</div>
@@ -139,16 +139,16 @@ export function LeftSidebar() {
         </TooltipContent>
       </Tooltip>
 
-      <div className="my-1 h-px w-6 bg-tv-border" />
+      <div className="my-1 h-px w-8 bg-tv-border" />
 
       {LOCKED.map((t) => (
         <Tooltip key={t.label}>
           <TooltipTrigger
             disabled
             aria-label={t.label}
-            className="flex h-8 w-8 cursor-not-allowed items-center justify-center rounded text-tv-text-dim opacity-40"
+            className="flex h-11 w-11 cursor-not-allowed items-center justify-center rounded text-tv-text-dim opacity-40"
           >
-            <Lock className="h-3.5 w-3.5" />
+            <Lock className="h-5 w-5" />
           </TooltipTrigger>
           <TooltipContent side="right" className="text-xs">
             <div className="font-medium">{t.label}</div>

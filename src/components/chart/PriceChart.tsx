@@ -2334,12 +2334,12 @@ export function PriceChart({ symbol, timeframe }: Props) {
         className="pointer-events-none absolute z-10 flex flex-col gap-1 text-xs tabular-nums"
       >
         {/* Row 1: symbol info + OHLC stats inline on hover (fixed height, never wraps) */}
-        <div className="flex h-5 flex-nowrap items-center gap-x-3 overflow-hidden whitespace-nowrap">
-          <div className="flex shrink-0 items-center gap-2 text-[13px] font-semibold">
+        <div className="flex h-6 flex-nowrap items-center gap-x-3 overflow-hidden whitespace-nowrap">
+          <div className="flex shrink-0 items-center gap-2 text-[15px] font-semibold">
             <span className="text-tv-text">{symbol}</span>
             {companyName && (
               <span
-                className="max-w-[180px] truncate font-normal text-tv-text-muted"
+                className="max-w-[220px] truncate font-normal text-tv-text-muted"
                 title={companyName}
               >
                 {companyName}
@@ -2365,7 +2365,7 @@ export function PriceChart({ symbol, timeframe }: Props) {
             )}
           </div>
           {hover && (
-            <div className="flex items-center gap-x-3 text-[11px]">
+            <div className="flex items-center gap-x-3 text-[13px]">
               <span className="text-tv-text-muted">
                 O <span className={greenOrRed(hover.c - hover.o)}>{formatPrice(hover.o)}</span>
               </span>
@@ -2390,19 +2390,19 @@ export function PriceChart({ symbol, timeframe }: Props) {
         </div>
 
         {/* Row 2: big live price (always present — reserves space even while loading) */}
-        <div className="flex h-7 items-center gap-2">
+        <div className="flex h-8 items-center gap-2">
           {lastPrice ? (
             <>
-              <span className={`text-lg font-semibold tabular-nums ${greenOrRed(lastPrice.pct)}`}>
+              <span className={`text-xl font-semibold tabular-nums ${greenOrRed(lastPrice.pct)}`}>
                 {formatPrice(lastPrice.value)}
               </span>
-              <span className={`text-xs ${greenOrRed(lastPrice.pct)}`}>
+              <span className={`text-sm ${greenOrRed(lastPrice.pct)}`}>
                 {lastPrice.pct >= 0 ? "+" : ""}
                 {lastPrice.pct.toFixed(2)}%
               </span>
             </>
           ) : (
-            <span className="text-xs text-tv-text-muted">Cargando…</span>
+            <span className="text-sm text-tv-text-muted">Cargando…</span>
           )}
         </div>
 

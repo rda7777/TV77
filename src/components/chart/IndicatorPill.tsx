@@ -25,12 +25,12 @@ export function IndicatorPill({
   return (
     <div
       className={cn(
-        "group/pill pointer-events-auto flex items-center gap-1.5 rounded bg-tv-panel/95 px-1.5 py-0.5 text-[11px] shadow-sm ring-1 ring-tv-border backdrop-blur",
+        "group/pill pointer-events-auto flex items-center gap-2 rounded bg-tv-panel/95 px-2 py-1 text-[13px] shadow-sm ring-1 ring-tv-border backdrop-blur",
         hidden && "opacity-50",
       )}
     >
       <span
-        className="h-1.5 w-1.5 shrink-0 rounded-full"
+        className="h-2 w-2 shrink-0 rounded-full"
         style={{ background: color }}
       />
       <span className="font-medium text-tv-text">{name}</span>
@@ -45,9 +45,9 @@ export function IndicatorPill({
           className="rounded p-0.5 text-tv-text-dim transition-colors hover:bg-tv-panel-hover hover:text-tv-text"
         >
           {hidden ? (
-            <EyeOff className="h-3 w-3" />
+            <EyeOff className="h-4 w-4" />
           ) : (
-            <Eye className="h-3 w-3" />
+            <Eye className="h-4 w-4" />
           )}
         </button>
         <button
@@ -56,7 +56,7 @@ export function IndicatorPill({
           aria-label="Configurar"
           className="rounded p-0.5 text-tv-text-dim transition-colors hover:bg-tv-panel-hover hover:text-tv-text"
         >
-          <Settings className="h-3 w-3" />
+          <Settings className="h-4 w-4" />
         </button>
         <button
           onClick={onRemove}
@@ -64,7 +64,7 @@ export function IndicatorPill({
           aria-label="Eliminar"
           className="rounded p-0.5 text-tv-text-dim transition-colors hover:bg-tv-panel-hover hover:text-tv-red"
         >
-          <X className="h-3 w-3" />
+          <X className="h-4 w-4" />
         </button>
       </div>
     </div>
