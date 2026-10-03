@@ -716,8 +716,10 @@ export function PriceChart({ symbol, timeframe }: Props) {
       layout: {
         background: { color: palette.bg },
         textColor: palette.text,
-        fontFamily: "var(--font-sans), Inter, system-ui, sans-serif",
-        fontSize: 11,
+        // Canvas can't resolve CSS variables: a `var(--font-sans)` here makes the whole font
+        // string invalid and the axis silently falls back to the default 10px sans-serif.
+        fontFamily: getComputedStyle(containerRef.current).fontFamily,
+        fontSize: 13,
         panes: { separatorColor: palette.border, separatorHoverColor: palette.border },
       },
       grid: {
