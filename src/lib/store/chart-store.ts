@@ -6,6 +6,12 @@ import type { Timeframe } from "@/lib/binance/types";
 import type { ChartEventKey } from "@/lib/stocks/events";
 import { getMarketType } from "@/lib/market";
 import {
+  CEDEAR_EMA200_NOTES,
+  CEDEAR_EMA200_SECTION_ID,
+  CEDEAR_EMA200_SECTION_NAME,
+  CEDEAR_EMA200_SYMBOLS,
+} from "./cedear-ema200";
+import {
   CEDEAR_TOP30_NOTES,
   CEDEAR_TOP30_SECTION_ID,
   CEDEAR_TOP30_SECTION_NAME,
@@ -209,6 +215,12 @@ const DEFAULT_WATCHLIST_DOC: WatchlistDoc = {
       symbols: CEDEAR_TOP30_SYMBOLS,
       collapsed: false,
     },
+    {
+      id: CEDEAR_EMA200_SECTION_ID,
+      name: CEDEAR_EMA200_SECTION_NAME,
+      symbols: CEDEAR_EMA200_SYMBOLS,
+      collapsed: false,
+    },
   ],
 };
 
@@ -363,7 +375,7 @@ export const useChartStore = create<ChartState>()(
       events: { dividend: true, split: true, earnings: true, news: true },
       watchlists: [DEFAULT_WATCHLIST_DOC],
       activeWatchlistId: DEFAULT_WATCHLIST_DOC.id,
-      notes: { ...STOCK_NOTES, ...FIRST_EAGLE_NOTES, ...CEDEAR_TOP30_NOTES },
+      notes: { ...STOCK_NOTES, ...FIRST_EAGLE_NOTES, ...CEDEAR_TOP30_NOTES, ...CEDEAR_EMA200_NOTES },
       magnetMode: false,
       theme: "dark",
       scaleMode: "linear",
@@ -761,7 +773,7 @@ export const useChartStore = create<ChartState>()(
     }),
     {
       name: "tv-gratis-chart-state",
-      version: 8,
+      version: 9,
       migrate: (persisted, version) => {
         const state = persisted as Record<string, unknown>;
         if (Array.isArray(state.watchlist) && !Array.isArray(state.watchlists)) {
@@ -845,6 +857,20 @@ export const useChartStore = create<ChartState>()(
             });
           }
           state.notes = { ...CEDEAR_TOP30_NOTES, ...(state.notes as Record<string, string>) };
+        }
+        // v9: same for the scanner's daily EMA200 bounces, most recent contact first
+        if (version < 9 && Array.isArray(state.watchlists)) {
+          const watchlists = state.watchlists as WatchlistDoc[];
+          const target = watchlists.find((w) => w.id === state.activeWatchlistId) ?? watchlists[0];
+          if (target && !target.sections.some((sec) => sec.id === CEDEAR_EMA200_SECTION_ID)) {
+            target.sections.push({
+              id: CEDEAR_EMA200_SECTION_ID,
+              name: CEDEAR_EMA200_SECTION_NAME,
+              symbols: CEDEAR_EMA200_SYMBOLS,
+              collapsed: false,
+            });
+          }
+          state.notes = { ...CEDEAR_EMA200_NOTES, ...(state.notes as Record<string, string>) };
         }
         return state;
       },
