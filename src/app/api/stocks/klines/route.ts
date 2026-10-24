@@ -4,7 +4,13 @@ import { toYahooSymbol } from "@/lib/stocks/commodities";
 interface YahooChartResult {
   chart: {
     result: Array<{
-      meta: { regularMarketTime?: number };
+      meta: {
+        regularMarketTime?: number;
+        regularMarketPrice?: number;
+        regularMarketDayHigh?: number;
+        regularMarketDayLow?: number;
+        currentTradingPeriod?: { regular?: { end?: number } };
+      };
       timestamp: number[];
       indicators: {
         quote: Array<{
@@ -50,6 +56,7 @@ export async function GET(req: NextRequest) {
 
   const { meta, timestamp, indicators } = result;
   const quote = indicators.quote[0];
+  fillPendingLastBar(quote, meta);
   const candles = timestamp
     .map((t, i) => ({
       time: t,
@@ -65,9 +72,26 @@ export async function GET(req: NextRequest) {
         c.open !== null && c.high !== null && c.low !== null && c.close !== null,
     );
 
-  mergeLiveTick(candles, meta.regularMarketTime);
+  mergeLiveTick(candles, meta.regularMarketTime, meta.currentTradingPeriod?.regular?.end);
 
   return NextResponse.json(candles);
+}
+
+/**
+ * After the close Yahoo often publishes today's daily/weekly bar with open/high/low/volume
+ * but a null close until its end-of-day job runs, so the filter would drop today's candle.
+ * Complete it from the session's last regular-market price.
+ */
+function fillPendingLastBar(
+  quote: NonNullable<YahooChartResult["chart"]["result"]>[number]["indicators"]["quote"][number],
+  meta: { regularMarketPrice?: number; regularMarketDayHigh?: number; regularMarketDayLow?: number },
+) {
+  const i = quote.close.length - 1;
+  const price = meta.regularMarketPrice;
+  if (i < 0 || quote.close[i] !== null || quote.open[i] === null || price === undefined) return;
+  quote.close[i] = price;
+  quote.high[i] ??= Math.max(quote.open[i]!, meta.regularMarketDayHigh ?? price, price);
+  quote.low[i] ??= Math.min(quote.open[i]!, meta.regularMarketDayLow ?? price, price);
 }
 
 type Kline = { time: number; open: number; high: number; low: number; close: number; volume: number };
@@ -76,18 +100,26 @@ type Kline = { time: number; open: number; high: number; low: number; close: num
  * During market hours Yahoo appends a live point stamped with the last trade time
  * (e.g. 19:58:40) instead of the bar's open time. Its timestamp changes on every request,
  * so the chart would add a new flat candle on each poll. Fold it into the bar it belongs to.
+ * After the close it instead appends the closing print stamped exactly at the session end
+ * (16:00:00 ET, 0 volume), which would show as an extra flat candle past the close.
  */
-function mergeLiveTick(candles: Kline[], regularMarketTime: number | undefined) {
-  if (regularMarketTime === undefined || candles.length < 3) return;
+function mergeLiveTick(
+  candles: Kline[],
+  regularMarketTime: number | undefined,
+  regularEnd: number | undefined,
+) {
+  if (candles.length < 3) return;
   const tick = candles[candles.length - 1];
-  if (tick.time !== regularMarketTime) return;
+  const afterClose = regularEnd !== undefined && tick.time >= regularEnd;
+  if (tick.time !== regularMarketTime && !afterClose) return;
   const bar = candles[candles.length - 2];
   // Smallest recent bar spacing ≈ the interval (weekends/overnight gaps only make it bigger)
   let step = Infinity;
   for (let i = Math.max(1, candles.length - 6); i < candles.length - 1; i++) {
     step = Math.min(step, candles[i].time - candles[i - 1].time);
   }
-  if (tick.time - bar.time >= step) {
+  // A point past the session end never opens a bar — it closes the session's last one
+  if (!afterClose && tick.time - bar.time >= step) {
     // Tick opens a bar Yahoo hasn't published yet — stamp it with that bar's open time
     candles[candles.length - 1] = {
       ...tick,

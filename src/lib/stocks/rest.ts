@@ -63,6 +63,19 @@ export async function searchStockSymbols(
   }[];
 }
 
+/** One-line Spanish description of a stock/ETF ("Sector — what it does"), or null if unavailable */
+export async function fetchStockNote(symbol: string): Promise<string | null> {
+  try {
+    const res = await fetch(`/api/stocks/profile?symbol=${encodeURIComponent(symbol)}`, {
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    return ((await res.json()) as { note: string | null }).note;
+  } catch {
+    return null;
+  }
+}
+
 const symbolNameCache = new Map<string, string | null>();
 
 /**

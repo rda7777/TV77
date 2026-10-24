@@ -27,7 +27,7 @@ import {
   type StockEventsResponse,
 } from "@/lib/stocks/events";
 import { ema, sma, smaOfPoints, rsi, macd, supportResistance } from "@/lib/indicators";
-import { ChevronDown, ChevronRight, Zap } from "lucide-react";
+import { ChevronDown, ChevronRight, Trash2, Zap } from "lucide-react";
 import { NEWS_COLOR, fetchStockNews, timeAgo, type NewsItem } from "@/lib/stocks/news";
 import { cn } from "@/lib/utils";
 import type { Candle, Timeframe } from "@/lib/binance/types";
@@ -35,6 +35,7 @@ import {
   DEFAULT_TRENDLINE_COLOR,
   DEFAULT_TRENDLINE_EXTEND,
   INDICATOR_COLORS,
+  TRENDLINE_COLORS,
   useChartStore,
   type IndicatorKey,
   type TrendPoint,
@@ -89,6 +90,8 @@ function durationLabel(aTime: number, bTime: number): string {
 
 /** How far (px) a cloned trend line is offset from its original */
 const CLONE_OFFSET_PX = 32;
+// Pixel tolerance for clicking a horizontal line
+const HLINE_HIT_PX = 5;
 
 function toExtend(left: boolean, right: boolean): TrendLineExtend {
   if (left && right) return "both";
@@ -231,6 +234,10 @@ export function PriceChart({ symbol, timeframe }: Props) {
   const magnetMode = useChartStore((s) => s.magnetMode);
   const priceLines = useChartStore((s) => s.priceLines);
   const addPriceLine = useChartStore((s) => s.addPriceLine);
+  const removePriceLine = useChartStore((s) => s.removePriceLine);
+  const updatePriceLine = useChartStore((s) => s.updatePriceLine);
+  const selectedPriceLineId = useChartStore((s) => s.selectedPriceLineId);
+  const setSelectedPriceLineId = useChartStore((s) => s.setSelectedPriceLineId);
   const trendLines = useChartStore((s) => s.trendLines);
   const addTrendLine = useChartStore((s) => s.addTrendLine);
   const updateTrendLine = useChartStore((s) => s.updateTrendLine);
@@ -272,6 +279,10 @@ export function PriceChart({ symbol, timeframe }: Props) {
   scaleModeRef.current = scaleMode;
   const addPriceLineRef = useRef(addPriceLine);
   addPriceLineRef.current = addPriceLine;
+  const priceLinesRef = useRef(priceLines);
+  priceLinesRef.current = priceLines;
+  const setSelectedPriceLineIdRef = useRef(setSelectedPriceLineId);
+  setSelectedPriceLineIdRef.current = setSelectedPriceLineId;
   const addTrendLineRef = useRef(addTrendLine);
   addTrendLineRef.current = addTrendLine;
   const trendLinesRef = useRef(trendLines);
@@ -454,6 +465,20 @@ export function PriceChart({ symbol, timeframe }: Props) {
   }
   const hitTestArrowRef = useRef(hitTestArrow);
   hitTestArrowRef.current = hitTestArrow;
+
+  // Helper — topmost horizontal line (for this symbol) within a few pixels of a chart-relative y
+  function hitTestPriceLine(y: number): string | null {
+    const series = candleSeriesRef.current;
+    if (!series) return null;
+    const lines = priceLinesRef.current.filter((p) => p.symbol === symbolRef.current);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const ly = series.priceToCoordinate(lines[i].price);
+      if (ly !== null && Math.abs(ly - y) <= HLINE_HIT_PX) return lines[i].id;
+    }
+    return null;
+  }
+  const hitTestPriceLineRef = useRef(hitTestPriceLine);
+  hitTestPriceLineRef.current = hitTestPriceLine;
 
   // Helper — drag an arrow by its shaft ("body") or move its tail/head ("a"/"b")
   function startDragArrow(e: React.MouseEvent, id: string, hit: ArrowHit) {
@@ -819,11 +844,19 @@ export function PriceChart({ symbol, timeframe }: Props) {
           setSelectedTrendLineIdRef.current(trendHit);
           return;
         }
+        // Horizontal lines only live in the candle pane
+        const hlineHit =
+          (param.paneIndex ?? 0) === 0 ? hitTestPriceLineRef.current(param.point.y) : null;
+        if (hlineHit) {
+          setSelectedPriceLineIdRef.current(hlineHit);
+          return;
+        }
         const rectHit = hitTestRectangleRef.current(param.point.x, param.point.y);
         if (rectHit) {
           setSelectedRectangleIdRef.current(rectHit);
           return;
         }
+        setSelectedPriceLineIdRef.current(null);
         setSelectedTrendLineIdRef.current(null);
         setSelectedRectangleIdRef.current(null);
         setSelectedArrowIdRef.current(null);
@@ -1348,7 +1381,7 @@ export function PriceChart({ symbol, timeframe }: Props) {
       if (!map.has(pl.id)) {
         const apiLine = series.createPriceLine({
           price: pl.price,
-          color: TV_COLORS.blue,
+          color: pl.color ?? DEFAULT_TRENDLINE_COLOR,
           lineWidth: 1,
           lineStyle: 2,
           axisLabelVisible: true,
@@ -1357,7 +1390,17 @@ export function PriceChart({ symbol, timeframe }: Props) {
         map.set(pl.id, apiLine);
       }
     }
-  }, [priceLines, symbol]);
+    // Selected line is drawn solid and thicker, like TradingView
+    const colorById = new Map(linesForThisSymbol.map((p) => [p.id, p.color ?? DEFAULT_TRENDLINE_COLOR]));
+    for (const [id, apiLine] of map.entries()) {
+      const selected = id === selectedPriceLineId && tool === "cursor";
+      apiLine.applyOptions({
+        color: colorById.get(id),
+        lineWidth: selected ? 2 : 1,
+        lineStyle: selected ? 0 : 2,
+      });
+    }
+  }, [priceLines, symbol, selectedPriceLineId, tool]);
 
   // Sync trend lines from the store to series primitives (one primitive per line)
   useEffect(() => {
@@ -1534,7 +1577,7 @@ export function PriceChart({ symbol, timeframe }: Props) {
 
   // Delete/Backspace removes the selected drawing; Escape deselects it
   useEffect(() => {
-    if (!selectedTrendLineId && !selectedRectangleId && !selectedArrowId) return;
+    if (!selectedTrendLineId && !selectedRectangleId && !selectedArrowId && !selectedPriceLineId) return;
     function onKeyDown(e: KeyboardEvent) {
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
@@ -1545,10 +1588,13 @@ export function PriceChart({ symbol, timeframe }: Props) {
         if (selectedTrendLineId) removeTrendLine(selectedTrendLineId);
         if (selectedRectangleId) removeRectangle(selectedRectangleId);
         if (selectedArrowId) removeArrow(selectedArrowId);
+        if (selectedPriceLineId) removePriceLine(selectedPriceLineId);
         setSelectedTrendLineId(null);
         setSelectedRectangleId(null);
         setSelectedArrowId(null);
+        setSelectedPriceLineId(null);
       } else if (e.key === "Escape") {
+        setSelectedPriceLineId(null);
         setSelectedTrendLineId(null);
         setSelectedRectangleId(null);
         setSelectedArrowId(null);
@@ -1560,6 +1606,9 @@ export function PriceChart({ symbol, timeframe }: Props) {
     selectedTrendLineId,
     selectedRectangleId,
     selectedArrowId,
+    selectedPriceLineId,
+    removePriceLine,
+    setSelectedPriceLineId,
     removeTrendLine,
     removeRectangle,
     removeArrow,
@@ -2017,6 +2066,48 @@ export function PriceChart({ symbol, timeframe }: Props) {
     }
   }
 
+  let priceLineToolbarRender: React.ReactNode = null;
+  if (tool === "cursor" && selectedPriceLineId && chartRef.current && candleSeriesRef.current) {
+    const selected = priceLines.find((p) => p.id === selectedPriceLineId && p.symbol === symbol);
+    const y = selected ? candleSeriesRef.current.priceToCoordinate(selected.price) : null;
+    if (selected && y !== null) {
+      priceLineToolbarRender = (
+        <div
+          style={{ left: chartRef.current.timeScale().width() / 2, top: Math.max(4, y - 40) }}
+          className="absolute z-30 flex -translate-x-1/2 items-center gap-1 rounded border border-tv-border bg-tv-panel px-1.5 py-1 shadow-md"
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          {TRENDLINE_COLORS.map((c) => (
+            <button
+              key={c}
+              type="button"
+              aria-label={`Color ${c}`}
+              onClick={() => updatePriceLine(selected.id, { color: c })}
+              style={{ backgroundColor: c }}
+              className={cn(
+                "h-4 w-4 rounded-full border-2 transition-transform hover:scale-110",
+                (selected.color ?? DEFAULT_TRENDLINE_COLOR) === c ? "border-tv-text" : "border-transparent",
+              )}
+            />
+          ))}
+          <div className="mx-0.5 h-4 w-px bg-tv-border" />
+          <button
+            type="button"
+            aria-label="Eliminar línea horizontal"
+            title="Eliminar (Supr)"
+            onClick={() => {
+              removePriceLine(selected.id);
+              setSelectedPriceLineId(null);
+            }}
+            className="flex h-6 w-6 items-center justify-center rounded text-tv-text-muted transition-colors hover:bg-tv-panel-hover hover:text-tv-red"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      );
+    }
+  }
+
   let arrowToolbarRender: React.ReactNode = null;
   if (tool === "cursor" && selectedArrowId) {
     const selected = arrows.find((ar) => ar.id === selectedArrowId && ar.symbol === symbol);
@@ -2297,6 +2388,7 @@ export function PriceChart({ symbol, timeframe }: Props) {
       {trendLineToolbarRender}
       {rectangleToolbarRender}
       {arrowToolbarRender}
+      {priceLineToolbarRender}
       {textAnnotationRenders}
       {textDraftRender}
       {magnetMarkerRender}

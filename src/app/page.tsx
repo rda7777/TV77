@@ -9,6 +9,7 @@ import { PriceChart } from "@/components/chart/PriceChart";
 import { IndicatorSettingsDialog } from "@/components/chart/IndicatorSettingsDialog";
 import { AlertsDialog } from "@/components/alerts/AlertsDialog";
 import { AlertsWatcher } from "@/components/alerts/AlertsWatcher";
+import { BackupSync } from "@/components/BackupSync";
 import { useChartStore } from "@/lib/store/chart-store";
 
 export default function HomePage() {
@@ -38,6 +39,7 @@ export default function HomePage() {
       <IndicatorSettingsDialog />
       <AlertsDialog />
       <AlertsWatcher />
+      <BackupSync />
     </div>
   );
 }

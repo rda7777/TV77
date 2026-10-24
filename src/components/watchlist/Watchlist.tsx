@@ -407,7 +407,7 @@ export function Watchlist() {
                       setAddSymbolTargetSection(section.id);
                       openSymbolDialog(true);
                     }}
-                    className="invisible rounded p-0.5 text-tv-text-muted hover:bg-tv-panel-hover hover:text-tv-text group-hover/section:visible"
+                    className="rounded p-0.5 text-tv-text-muted hover:bg-tv-panel-hover hover:text-tv-text"
                     aria-label={`Agregar símbolo a ${section.name}`}
                     title="Agregar símbolo aquí"
                   >

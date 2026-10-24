@@ -49,3 +49,6 @@ id_rsa*
 credentials.json
 .aws/
 .ssh/
+
+# automatic watchlist backups (personal data)
+/backups/

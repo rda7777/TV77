@@ -4,6 +4,22 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Timeframe } from "@/lib/binance/types";
 import type { ChartEventKey } from "@/lib/stocks/events";
+import { getMarketType } from "@/lib/market";
+import {
+  CEDEAR_TOP30_NOTES,
+  CEDEAR_TOP30_SECTION_ID,
+  CEDEAR_TOP30_SECTION_NAME,
+  CEDEAR_TOP30_SYMBOLS,
+} from "./cedear-top30";
+import {
+  FIRST_EAGLE_LEGACY_SECTION_NAME,
+  FIRST_EAGLE_LEGACY_SYMBOLS,
+  FIRST_EAGLE_NOTES,
+  FIRST_EAGLE_SECTION_ID,
+  FIRST_EAGLE_SECTION_NAME,
+  FIRST_EAGLE_SYMBOLS,
+} from "./first-eagle";
+import { STOCK_NOTES } from "./stock-notes";
 
 export type IndicatorKey =
   | "ema20"
@@ -27,6 +43,8 @@ export interface PriceLine {
   id: string;
   symbol: string;
   price: number;
+  /** Optional so lines saved before colors existed still load (they draw in the default color) */
+  color?: string;
 }
 
 export interface TrendPoint {
@@ -160,6 +178,12 @@ function genId(): string {
     : `${Date.now()}-${Math.random()}`;
 }
 
+/** A-Z by the name the watchlist shows (crypto without its USDT suffix) */
+function sortSymbolsByName(symbols: string[]): string[] {
+  const shown = (s: string) => (getMarketType(s) === "crypto" ? s.replace("USDT", "") : s);
+  return [...symbols].sort((a, b) => shown(a).localeCompare(shown(b)));
+}
+
 function makeWatchlist(name: string): WatchlistDoc {
   return {
     id: genId(),
@@ -173,6 +197,18 @@ const DEFAULT_WATCHLIST_DOC: WatchlistDoc = {
   name: "Watchlist",
   sections: [
     { id: "general", name: "General", symbols: DEFAULT_WATCHLIST, collapsed: false },
+    {
+      id: FIRST_EAGLE_SECTION_ID,
+      name: FIRST_EAGLE_SECTION_NAME,
+      symbols: FIRST_EAGLE_SYMBOLS,
+      collapsed: false,
+    },
+    {
+      id: CEDEAR_TOP30_SECTION_ID,
+      name: CEDEAR_TOP30_SECTION_NAME,
+      symbols: CEDEAR_TOP30_SYMBOLS,
+      collapsed: false,
+    },
   ],
 };
 
@@ -202,6 +238,7 @@ interface ChartState {
   // Drawings (persisted) and ephemeral UI state (tool, selections, dialogs — not persisted)
   tool: DrawingTool;
   priceLines: PriceLine[];
+  selectedPriceLineId: string | null;
   trendLines: TrendLine[];
   selectedTrendLineId: string | null;
   rectangles: Rectangle[];
@@ -248,6 +285,9 @@ interface ChartState {
   toggleMagnet: () => void;
   addPriceLine: (price: number, symbol: string) => void;
   clearPriceLines: (symbol?: string) => void;
+  removePriceLine: (id: string) => void;
+  updatePriceLine: (id: string, patch: Partial<Omit<PriceLine, "id" | "symbol">>) => void;
+  setSelectedPriceLineId: (id: string | null) => void;
   /** Adds a trend line (optionally with a non-default style) and returns its id */
   addTrendLine: (
     a: TrendPoint,
@@ -323,13 +363,14 @@ export const useChartStore = create<ChartState>()(
       events: { dividend: true, split: true, earnings: true, news: true },
       watchlists: [DEFAULT_WATCHLIST_DOC],
       activeWatchlistId: DEFAULT_WATCHLIST_DOC.id,
-      notes: {},
+      notes: { ...STOCK_NOTES, ...FIRST_EAGLE_NOTES, ...CEDEAR_TOP30_NOTES },
       magnetMode: false,
       theme: "dark",
       scaleMode: "linear",
       watchlistWidth: DEFAULT_WATCHLIST_WIDTH,
       tool: "cursor",
       priceLines: [],
+      selectedPriceLineId: null,
       trendLines: [],
       selectedTrendLineId: null,
       rectangles: [],
@@ -450,12 +491,25 @@ export const useChartStore = create<ChartState>()(
         set((state) => ({
           watchlists: state.watchlists.map((w) => {
             if (w.id !== state.activeWatchlistId) return w;
-            if (w.sections.some((sec) => sec.symbols.includes(s))) return w;
-            const targetId = sectionId ?? state.addSymbolTargetSection ?? w.sections[0].id;
+            const explicitId = sectionId ?? state.addSymbolTargetSection;
+            const current = w.sections.find((sec) => sec.symbols.includes(s));
+            // Already listed: only an explicit target section moves it there.
+            // The section that receives the symbol is re-sorted A-Z.
+            if (current && (!explicitId || current.id === explicitId)) return w;
+            const targetId =
+              explicitId && w.sections.some((sec) => sec.id === explicitId)
+                ? explicitId
+                : w.sections[0].id;
             return {
               ...w,
               sections: w.sections.map((sec) =>
-                sec.id === targetId ? { ...sec, symbols: [...sec.symbols, s] } : sec,
+                sec.id === targetId
+                  ? {
+                      ...sec,
+                      symbols: sortSymbolsByName([...sec.symbols.filter((x) => x !== s), s]),
+                      collapsed: false,
+                    }
+                  : { ...sec, symbols: sec.symbols.filter((x) => x !== s) },
               ),
             };
           }),
@@ -556,6 +610,23 @@ export const useChartStore = create<ChartState>()(
           priceLines: symbol
             ? state.priceLines.filter((p) => p.symbol !== symbol)
             : [],
+          selectedPriceLineId: null,
+        })),
+      removePriceLine: (id) =>
+        set((state) => ({
+          priceLines: state.priceLines.filter((p) => p.id !== id),
+          selectedPriceLineId: state.selectedPriceLineId === id ? null : state.selectedPriceLineId,
+        })),
+      updatePriceLine: (id, patch) =>
+        set((state) => ({
+          priceLines: state.priceLines.map((p) => (p.id === id ? { ...p, ...patch } : p)),
+        })),
+      setSelectedPriceLineId: (selectedPriceLineId) =>
+        set((state) => ({
+          selectedPriceLineId,
+          selectedTrendLineId: selectedPriceLineId ? null : state.selectedTrendLineId,
+          selectedRectangleId: selectedPriceLineId ? null : state.selectedRectangleId,
+          selectedArrowId: selectedPriceLineId ? null : state.selectedArrowId,
         })),
       addTrendLine: (a, b, symbol, style) => {
         const id = genId();
@@ -587,6 +658,7 @@ export const useChartStore = create<ChartState>()(
       setSelectedTrendLineId: (selectedTrendLineId) =>
         set((state) => ({
           selectedTrendLineId,
+          selectedPriceLineId: selectedTrendLineId ? null : state.selectedPriceLineId,
           selectedRectangleId: selectedTrendLineId ? null : state.selectedRectangleId,
           selectedArrowId: selectedTrendLineId ? null : state.selectedArrowId,
         })),
@@ -621,6 +693,7 @@ export const useChartStore = create<ChartState>()(
       setSelectedRectangleId: (selectedRectangleId) =>
         set((state) => ({
           selectedRectangleId,
+          selectedPriceLineId: selectedRectangleId ? null : state.selectedPriceLineId,
           selectedTrendLineId: selectedRectangleId ? null : state.selectedTrendLineId,
           selectedArrowId: selectedRectangleId ? null : state.selectedArrowId,
         })),
@@ -645,6 +718,7 @@ export const useChartStore = create<ChartState>()(
       setSelectedArrowId: (selectedArrowId) =>
         set((state) => ({
           selectedArrowId,
+          selectedPriceLineId: selectedArrowId ? null : state.selectedPriceLineId,
           selectedTrendLineId: selectedArrowId ? null : state.selectedTrendLineId,
           selectedRectangleId: selectedArrowId ? null : state.selectedRectangleId,
         })),
@@ -687,8 +761,8 @@ export const useChartStore = create<ChartState>()(
     }),
     {
       name: "tv-gratis-chart-state",
-      version: 1,
-      migrate: (persisted) => {
+      version: 8,
+      migrate: (persisted, version) => {
         const state = persisted as Record<string, unknown>;
         if (Array.isArray(state.watchlist) && !Array.isArray(state.watchlists)) {
           const doc: WatchlistDoc = {
@@ -706,6 +780,71 @@ export const useChartStore = create<ChartState>()(
           state.watchlists = [doc];
           state.activeWatchlistId = doc.id;
           delete state.watchlist;
+        }
+        // v2: seed the "First Eagle" section (with a note per stock) into the active watchlist.
+        // Symbols the user already lists stay where they are, and existing notes are kept.
+        if (version < 2 && Array.isArray(state.watchlists)) {
+          const watchlists = state.watchlists as WatchlistDoc[];
+          const target = watchlists.find((w) => w.id === state.activeWatchlistId) ?? watchlists[0];
+          if (target && !target.sections.some((sec) => sec.id === FIRST_EAGLE_SECTION_ID)) {
+            const listed = new Set(target.sections.flatMap((sec) => sec.symbols));
+            target.sections.push({
+              id: FIRST_EAGLE_SECTION_ID,
+              name: FIRST_EAGLE_SECTION_NAME,
+              symbols: FIRST_EAGLE_SYMBOLS.filter((s) => !listed.has(s)),
+              collapsed: false,
+            });
+            state.notes = { ...FIRST_EAGLE_NOTES, ...(state.notes as Record<string, string>) };
+          }
+        }
+        // v3: the section seeded by v2 held every large holding; narrow it to the ones with a CEDEAR
+        if (version === 2 && Array.isArray(state.watchlists)) {
+          for (const w of state.watchlists as WatchlistDoc[]) {
+            const section = w.sections.find((sec) => sec.id === FIRST_EAGLE_SECTION_ID);
+            if (!section) continue;
+            const listedElsewhere = new Set(
+              w.sections.filter((sec) => sec !== section).flatMap((sec) => sec.symbols),
+            );
+            // The CEDEAR is on the other share class for these two
+            const swapped = section.symbols.map((s) =>
+              s === "GOOG" ? "GOOGL" : s === "BRK-A" ? "BRK-B" : s,
+            );
+            section.symbols = swapped.filter(
+              (s, i) =>
+                !FIRST_EAGLE_LEGACY_SYMBOLS.includes(s) &&
+                !listedElsewhere.has(s) &&
+                swapped.indexOf(s) === i,
+            );
+            if (section.name === FIRST_EAGLE_LEGACY_SECTION_NAME) {
+              section.name = FIRST_EAGLE_SECTION_NAME;
+            }
+          }
+          state.notes = { ...FIRST_EAGLE_NOTES, ...(state.notes as Record<string, string>) };
+        }
+        // v4-v6: seed descriptions for symbols that have no note yet (each version added symbols)
+        if (version < 6) {
+          state.notes = { ...STOCK_NOTES, ...(state.notes as Record<string, string>) };
+        }
+        // v7: an early version of the automatic note gave EWZ a long boilerplate text; swap it
+        // for the hand-written one (a note the user wrote themselves is left alone)
+        if (version < 7) {
+          const notes = state.notes as Record<string, string> | undefined;
+          if (notes?.EWZ?.startsWith("ETF — El fondo generalmente")) notes.EWZ = STOCK_NOTES.EWZ;
+        }
+        // v8: seed the CEDEAR scanner's top 30 section into the active watchlist, in ranking order.
+        // Unlike v2 it keeps symbols the user already lists elsewhere, so the ranking stays whole.
+        if (version < 8 && Array.isArray(state.watchlists)) {
+          const watchlists = state.watchlists as WatchlistDoc[];
+          const target = watchlists.find((w) => w.id === state.activeWatchlistId) ?? watchlists[0];
+          if (target && !target.sections.some((sec) => sec.id === CEDEAR_TOP30_SECTION_ID)) {
+            target.sections.push({
+              id: CEDEAR_TOP30_SECTION_ID,
+              name: CEDEAR_TOP30_SECTION_NAME,
+              symbols: CEDEAR_TOP30_SYMBOLS,
+              collapsed: false,
+            });
+          }
+          state.notes = { ...CEDEAR_TOP30_NOTES, ...(state.notes as Record<string, string>) };
         }
         return state;
       },
