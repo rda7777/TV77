@@ -18,6 +18,7 @@ import { fetchKlines } from "@/lib/binance/rest";
 import { getBinanceWS } from "@/lib/binance/ws";
 import { fetchStockKlines, fetchSymbolName } from "@/lib/stocks/rest";
 import { getMarketType } from "@/lib/market";
+import { getDollarInfo } from "@/lib/stocks/dollars";
 import {
   EVENT_STYLE,
   bucketEventsByCandle,
@@ -2443,7 +2444,7 @@ export function PriceChart({ symbol, timeframe }: Props) {
             <span className="uppercase text-tv-text-muted">{timeframe}</span>
             <span className="text-tv-text-muted">·</span>
             <span className="text-tv-text-muted">
-              {market === "stock" ? "Yahoo Finance" : "Binance"}
+              {getDollarInfo(symbol) ? "ArgentinaDatos" : market === "stock" ? "Yahoo Finance" : "Binance"}
             </span>
             {market === "stock" && eventToggles.earnings && stockEvents?.nextEarnings && (
               <>

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchCommodities } from "@/lib/stocks/commodities";
 import { getIndexByYahooSymbol, searchIndices } from "@/lib/stocks/indices";
+import { searchDollars } from "@/lib/stocks/dollars";
 
 const FALLBACK_SYMBOLS: { symbol: string; name: string; kind: "stock" | "etf" }[] = [
   { symbol: "AAPL", name: "Apple Inc.", kind: "stock" },
@@ -58,7 +59,12 @@ export async function GET(req: NextRequest) {
     name: i.name,
     kind: "index" as const,
   }));
-  const localResults = [...indexResults, ...commodityResults];
+  const dollarResults = searchDollars(q).map((d) => ({
+    symbol: d.symbol,
+    name: d.name,
+    kind: "currency" as const,
+  }));
+  const localResults = [...dollarResults, ...indexResults, ...commodityResults];
 
   try {
     const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(q)}`;

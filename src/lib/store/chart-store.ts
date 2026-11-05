@@ -26,6 +26,12 @@ import {
   FIRST_EAGLE_SYMBOLS,
 } from "./first-eagle";
 import { STOCK_NOTES } from "./stock-notes";
+import {
+  DOLLAR_NOTES,
+  DOLLAR_SYMBOLS,
+  DOLLARS_SECTION_ID,
+  DOLLARS_SECTION_NAME,
+} from "@/lib/stocks/dollars";
 
 export type IndicatorKey =
   | "ema20"
@@ -203,6 +209,7 @@ const DEFAULT_WATCHLIST_DOC: WatchlistDoc = {
   name: "Watchlist",
   sections: [
     { id: "general", name: "General", symbols: DEFAULT_WATCHLIST, collapsed: false },
+    { id: DOLLARS_SECTION_ID, name: DOLLARS_SECTION_NAME, symbols: DOLLAR_SYMBOLS, collapsed: false },
     {
       id: FIRST_EAGLE_SECTION_ID,
       name: FIRST_EAGLE_SECTION_NAME,
@@ -375,7 +382,7 @@ export const useChartStore = create<ChartState>()(
       events: { dividend: true, split: true, earnings: true, news: true },
       watchlists: [DEFAULT_WATCHLIST_DOC],
       activeWatchlistId: DEFAULT_WATCHLIST_DOC.id,
-      notes: { ...STOCK_NOTES, ...FIRST_EAGLE_NOTES, ...CEDEAR_TOP30_NOTES, ...CEDEAR_EMA200_NOTES },
+      notes: { ...STOCK_NOTES, ...FIRST_EAGLE_NOTES, ...CEDEAR_TOP30_NOTES, ...CEDEAR_EMA200_NOTES, ...DOLLAR_NOTES },
       magnetMode: false,
       theme: "dark",
       scaleMode: "linear",
@@ -773,7 +780,7 @@ export const useChartStore = create<ChartState>()(
     }),
     {
       name: "tv-gratis-chart-state",
-      version: 9,
+      version: 10,
       migrate: (persisted, version) => {
         const state = persisted as Record<string, unknown>;
         if (Array.isArray(state.watchlist) && !Array.isArray(state.watchlists)) {
@@ -871,6 +878,20 @@ export const useChartStore = create<ChartState>()(
             });
           }
           state.notes = { ...CEDEAR_EMA200_NOTES, ...(state.notes as Record<string, string>) };
+        }
+        // v10: the Argentine exchange rates (MEP, CCL, blue…) right after the first section
+        if (version < 10 && Array.isArray(state.watchlists)) {
+          const watchlists = state.watchlists as WatchlistDoc[];
+          const target = watchlists.find((w) => w.id === state.activeWatchlistId) ?? watchlists[0];
+          if (target && !target.sections.some((sec) => sec.id === DOLLARS_SECTION_ID)) {
+            target.sections.splice(1, 0, {
+              id: DOLLARS_SECTION_ID,
+              name: DOLLARS_SECTION_NAME,
+              symbols: DOLLAR_SYMBOLS,
+              collapsed: false,
+            });
+          }
+          state.notes = { ...DOLLAR_NOTES, ...(state.notes as Record<string, string>) };
         }
         return state;
       },

@@ -52,14 +52,14 @@ export async function fetchStockQuotes(symbols: string[]): Promise<Ticker24h[]> 
 
 export async function searchStockSymbols(
   query: string,
-): Promise<{ symbol: string; name: string; kind: "stock" | "etf" | "commodity" | "index" }[]> {
+): Promise<{ symbol: string; name: string; kind: "stock" | "etf" | "commodity" | "index" | "currency" }[]> {
   const url = `/api/stocks/search?q=${encodeURIComponent(query)}`;
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) throw new Error(`stock search ${res.status}`);
   return (await res.json()) as {
     symbol: string;
     name: string;
-    kind: "stock" | "etf" | "commodity" | "index";
+    kind: "stock" | "etf" | "commodity" | "index" | "currency";
   }[];
 }
 

@@ -5,6 +5,7 @@ import { useChartStore } from "@/lib/store/chart-store";
 import { fetchTicker24h } from "@/lib/binance/rest";
 import { fetchStockQuotes } from "@/lib/stocks/rest";
 import { getMarketType } from "@/lib/market";
+import { getDollarInfo } from "@/lib/stocks/dollars";
 import type { Ticker24h } from "@/lib/binance/types";
 import { formatPrice, formatPct, formatVolume } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -71,7 +72,11 @@ export function BottomPanel() {
       <div className="ml-auto flex shrink-0 items-center gap-2 pl-3 text-[10px] text-tv-text-dim">
         <span className="inline-flex h-1.5 w-1.5 animate-pulse rounded-full bg-tv-green" />
         <span className="hidden sm:inline">
-          {market === "stock" ? "Yahoo Finance · Live" : "Binance · Live"}
+          {getDollarInfo(symbol)
+            ? "DolarAPI · Live"
+            : market === "stock"
+              ? "Yahoo Finance · Live"
+              : "Binance · Live"}
         </span>
       </div>
     </div>

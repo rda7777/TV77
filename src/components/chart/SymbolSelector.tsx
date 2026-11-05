@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { fetchExchangeSymbols } from "@/lib/binance/rest";
 import { fetchStockNote, searchStockSymbols } from "@/lib/stocks/rest";
+import { DOLLAR_NOTES } from "@/lib/stocks/dollars";
 import { FIRST_EAGLE_NOTES } from "@/lib/store/first-eagle";
 import { STOCK_NOTES } from "@/lib/store/stock-notes";
 import { useChartStore } from "@/lib/store/chart-store";
@@ -22,7 +23,7 @@ import type { SymbolInfo } from "@/lib/binance/types";
 interface Result {
   symbol: string;
   label: string;
-  market: "crypto" | "stock" | "etf" | "commodity" | "index";
+  market: "crypto" | "stock" | "etf" | "commodity" | "index" | "currency";
 }
 
 export function SymbolSelector() {
@@ -46,7 +47,7 @@ export function SymbolSelector() {
   function addDescriptionNote(s: string) {
     const { notes, setNote } = useChartStore.getState();
     if (notes[s]) return;
-    const known = STOCK_NOTES[s] ?? FIRST_EAGLE_NOTES[s];
+    const known = STOCK_NOTES[s] ?? FIRST_EAGLE_NOTES[s] ?? DOLLAR_NOTES[s];
     if (known) {
       setNote(s, known);
       return;
@@ -164,6 +165,8 @@ export function SymbolSelector() {
                         ? "Materia prima"
                         : s.market === "index"
                           ? "Índice"
+                          : s.market === "currency"
+                            ? "Dólar"
                           : "Stock"}
                 </span>
               </button>

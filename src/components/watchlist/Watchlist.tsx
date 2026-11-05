@@ -17,7 +17,7 @@ import {
 import { fetchTickers24h } from "@/lib/binance/rest";
 import { getBinanceWS } from "@/lib/binance/ws";
 import { fetchStockQuotes } from "@/lib/stocks/rest";
-import { getMarketType, getLogoUrl } from "@/lib/market";
+import { getMarketType, getLogoUrl, getWatchlistLabel } from "@/lib/market";
 import { useChartStore } from "@/lib/store/chart-store";
 import { exportBackup, importBackup } from "@/lib/store/backup";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -211,7 +211,7 @@ export function Watchlist() {
   }
 
   function displayName(s: string): string {
-    return getMarketType(s) === "crypto" ? s.replace("USDT", "") : s;
+    return getWatchlistLabel(s);
   }
 
   function sortSection(
@@ -567,7 +567,7 @@ export function Watchlist() {
                           }}
                         />
                         <span className="truncate font-medium text-tv-text">
-                          {getMarketType(s) === "crypto" ? s.replace("USDT", "") : s}
+                          {getWatchlistLabel(s)}
                         </span>
                         {getMarketType(s) === "crypto" && (
                           <span className="min-w-0 flex-1 basis-0 overflow-hidden text-[11px] whitespace-nowrap text-tv-text-dim">

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { toYahooSymbol } from "@/lib/stocks/commodities";
+import { fetchDollarQuote, getDollarInfo } from "@/lib/stocks/dollars";
 
 interface YahooChartResult {
   chart: {
@@ -19,6 +20,7 @@ interface YahooChartResult {
 }
 
 async function fetchOne(symbol: string) {
+  if (getDollarInfo(symbol)) return fetchDollarQuote(symbol);
   const yahooSymbol = toYahooSymbol(symbol);
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(
     yahooSymbol,

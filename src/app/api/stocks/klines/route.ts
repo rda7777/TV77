@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { toYahooSymbol } from "@/lib/stocks/commodities";
+import { fetchDollarKlines, getDollarInfo } from "@/lib/stocks/dollars";
 
 interface YahooChartResult {
   chart: {
@@ -33,6 +34,12 @@ export async function GET(req: NextRequest) {
 
   if (!symbol) {
     return NextResponse.json({ error: "missing symbol" }, { status: 400 });
+  }
+
+  if (getDollarInfo(symbol)) {
+    const candles = await fetchDollarKlines(symbol, interval);
+    if (!candles) return NextResponse.json({ error: "dollar data unavailable" }, { status: 502 });
+    return NextResponse.json(candles);
   }
 
   const yahooSymbol = toYahooSymbol(symbol);
